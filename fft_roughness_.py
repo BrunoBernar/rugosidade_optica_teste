@@ -1,7 +1,7 @@
 """
 Estimador de Rugosidade por Imagem de Microscopio
 
-Author: Bruno Bernardinetti - Github = 
+Author: Bruno Bernardinetti - Github = https://github.com/BrunoBernar/rugosidade_optica_teste
 ==================================================
 Fluxo de uso:
   1. Carregue pelo menos 10 imagens da peca de REFERENCIA e informe seu Ra real (um)
@@ -383,7 +383,7 @@ class App(tk.Tk):
             bg=BG2, fg="#e040fb", font=("Courier", 10, "bold"),
             relief="flat", pady=8, cursor="hand2",
             activebackground=BG, activeforeground="#e040fb",
-            state="disabled")                              # comeca desabilitado
+            state="disabled")                              # comeca desabilitado essa MERDA BUGA AS VEZES CUIDADO!
         self._btn_pdf.pack(fill="x")                      # ocupa largura total
 
         # Label de aviso sobre condicoes de captura
