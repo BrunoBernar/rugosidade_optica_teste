@@ -1,5 +1,4 @@
 ; Inno Setup Script - Estimador de Rugosidade Stellantis
-; Requer Inno Setup 6+ -> https://jrsoftware.org/isdl.php
 
 #define AppName      "Estimador de Rugosidade"
 #define AppVersion   "1.0.0"
@@ -19,7 +18,6 @@ AppUpdatesURL={#AppURL}
 DefaultDirName={autopf}\Stellantis\Rugosidade
 DefaultGroupName=Stellantis\Estimador de Rugosidade
 AllowNoIcons=yes
-LicenseFile=
 OutputDir=installer_output
 OutputBaseFilename=Setup_Rugosidade_Stellantis_v{#AppVersion}
 SetupIconFile=stellantis.ico
@@ -39,18 +37,16 @@ LanguageDetectionMethod=none
 Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
 
 [Tasks]
-Name: "desktopicon";    Description: "Criar atalho na Area de Trabalho"; GroupDescription: "Icones adicionais:"; Flags: unchecked
-Name: "quicklaunchicon"; Description: "Criar atalho na Barra de Tarefas"; GroupDescription: "Icones adicionais:"; Flags: unchecked; OnlyBelowVersion: 6.1; Check: not IsAdminInstallMode
+Name: "desktopicon"; Description: "Criar atalho na Area de Trabalho"; GroupDescription: "Icones adicionais:"; Flags: unchecked
 
 [Files]
 Source: "dist\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "stellantis.ico";     DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#AppName}";                  Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\stellantis.ico"
-Name: "{group}\Desinstalar {#AppName}";      Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#AppName}";            Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\stellantis.ico"; Tasks: desktopicon
-Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: quicklaunchicon
+Name: "{group}\{#AppName}";             Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\stellantis.ico"
+Name: "{group}\Desinstalar {#AppName}"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\{#AppName}";       Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\stellantis.ico"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "Executar {#AppName} agora"; Flags: nowait postinstall skipifsilent
@@ -59,8 +55,7 @@ Filename: "{app}\{#AppExeName}"; Description: "Executar {#AppName} agora"; Flags
 Type: filesandordirs; Name: "{app}"
 
 [Messages]
-; Mensagens customizadas em portugues
 WelcomeLabel1=Bem-vindo ao instalador do%n{#AppName}
-WelcomeLabel2=Este programa instalara o {#AppName} {#AppVersion} em seu computador.%n%nRecomenda-se fechar todos os outros programas antes de continuar.%n%nClique em Avancar para continuar.
+WelcomeLabel2=Este programa instalara o {#AppName} {#AppVersion} em seu computador.%n%nClique em Avancar para continuar.
 FinishedHeadingLabel=Instalacao concluida
 FinishedLabel=O {#AppName} foi instalado com sucesso.%n%nClique em Concluir para sair do instalador.

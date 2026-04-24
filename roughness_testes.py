@@ -22,7 +22,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from scipy.ndimage import sobel
-import os, io, datetime
+import os, io, datetime, threading, sys
+import pystray
+from pystray import MenuItem as TrayItem
+
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -1408,16 +1411,140 @@ class AbaInterferencia(tk.Frame):
         pass  # implementacao completa no codigo original
 
     def _carregar_xml(self):
-        pass  # implementacao completa no codigo original
+        path = filedialog.askopenfilename(
+            title="Selecionar XML da prensa",
+            filetypes=[("XML","*.xml"),("Todos","*.*")])
+        if not path: return
+        try:
+            import xml.etree.ElementTree as ET
+            root = ET.parse(path).getroot()
+            xs, Fs = [], []
+            F_min_xml = F_max_xml = None
+
+            # Formato 1: atributos PositionValue / ForceValue (Promess, Kistler)
+            for el in root.iter():
+                pv = el.attrib.get("PositionValue") or el.attrib.get("position") or el.attrib.get("pos")
+                fv = el.attrib.get("ForceValue")    or el.attrib.get("force")    or el.attrib.get("forca")
+                if pv and fv:
+                    try: xs.append(float(pv.replace(",","."))); Fs.append(float(fv.replace(",",".")))
+                    except ValueError: pass
+                if "ForceMin" in el.attrib:
+                    try: F_min_xml = float(el.attrib["ForceMin"].replace(",","."))
+                    except: pass
+                if "ForceMax" in el.attrib:
+                    try: F_max_xml = float(el.attrib["ForceMax"].replace(",","."))
+                    except: pass
+
+            # Formato 2: atributos x / y
+            if not xs:
+                for el in root.iter():
+                    if "x" in el.attrib and "y" in el.attrib:
+                        try: xs.append(float(el.attrib["x"].replace(",","."))); Fs.append(float(el.attrib["y"].replace(",",".")))
+                        except ValueError: pass
+
+            # Formato 3: tags <Position>/<Force> como texto filho
+            if not xs:
+                pos_tags = {"position","pos","position_mm","xvalue","x"}
+                frc_tags = {"force","forca","force_kn","forcekn","yvalue","y"}
+                ps = [e.text for e in root.iter() if e.tag.lower() in pos_tags and e.text]
+                fs = [e.text for e in root.iter() if e.tag.lower() in frc_tags and e.text]
+                for pt, ft in zip(ps, fs):
+                    try: xs.append(float(pt.replace(",","."))); Fs.append(float(ft.replace(",",".")))
+                    except ValueError: pass
+
+            if len(xs) < 2:
+                messagebox.showwarning("XML",
+                    "Nao foi possivel ler dados de forca/posicao.\n"
+                    "Formatos suportados: PositionValue/ForceValue, x/y, <Position>/<Force>.")
+                return
+
+            self._csv_x = np.array(xs)
+            self._csv_F = np.array(Fs)
+            nome = os.path.basename(path)
+            self._lbl_csv.config(
+                text=f"  {nome}  |  {len(xs)} pts  |  F_max = {max(Fs):.1f} kN", fg=GOLD)
+
+            info = []
+            if F_min_xml is not None:
+                self._F_min_ok.set(str(F_min_xml)); info.append(f"F_min={F_min_xml:.1f} kN")
+            if F_max_xml is not None:
+                self._F_max_ok.set(str(F_max_xml)); info.append(f"F_max={F_max_xml:.1f} kN")
+            self._lbl_xml_info.config(
+                text=("  Janela XML: " + "  |  ".join(info)) if info else "", fg=GOLD)
+
+            self._plotar_curva_real_isolada()
+        except Exception as e:
+            messagebox.showerror("Erro XML", str(e))
 
     def _carregar_csv(self):
-        pass  # implementacao completa no codigo original
+        path = filedialog.askopenfilename(
+            title="Selecionar arquivo CSV",
+            filetypes=[("CSV","*.csv *.txt"),("Todos","*.*")])
+        if not path: return
+        try:
+            sep  = self._csv_sep.get()
+            skip = max(0, int(self._csv_header.get() or 0))
+            xs, Fs = [], []
+            with open(path, encoding="utf-8", errors="replace") as f:
+                for i, line in enumerate(f):
+                    if i < skip: continue
+                    line = line.strip()
+                    if not line: continue
+                    parts = line.replace(",", ".").split(sep)
+                    if len(parts) < 2: continue
+                    try: xs.append(float(parts[0])); Fs.append(float(parts[1]))
+                    except ValueError: pass
+            if len(xs) < 2:
+                messagebox.showwarning("CSV",
+                    "Nao foi possivel ler dados validos.\n"
+                    "Verifique o separador e a linha de cabecalho.")
+                return
+            self._csv_x = np.array(xs)
+            self._csv_F = np.array(Fs)
+            nome = os.path.basename(path)
+            self._lbl_csv.config(
+                text=f"  {nome}  |  {len(xs)} pts  |  F_max = {max(Fs):.1f} kN", fg=ACCENT)
+            self._lbl_xml_info.config(text="")
+            self._plotar_curva_real_isolada()
+        except Exception as e:
+            messagebox.showerror("Erro CSV", str(e))
 
     def _limpar_csv(self):
-        pass  # implementacao completa no codigo original
+        self._csv_x = None
+        self._csv_F = None
+        self._lbl_csv.config(
+            text="  Nenhum arquivo carregado  |  XML da prensa ou CSV (pos_mm ; forca_kN)",
+            fg=FG_DIM)
+        self._lbl_xml_info.config(text="")
+        self._placeholder_interf()
 
     def _plotar_curva_real_isolada(self):
-        pass  # implementacao completa no codigo original
+        if self._csv_x is None or self._csv_F is None: return
+        ax = self._ax_forca
+        ax.cla()
+        ax.set_facecolor(BG3)
+        for sp in ax.spines.values(): sp.set_edgecolor(BORDER)
+        ax.tick_params(colors=FG_DIM, labelsize=8)
+
+        ax.plot(self._csv_x, self._csv_F, color=GOLD, linewidth=1.5, label="Curva real")
+
+        # Janela de aprovacao
+        try:
+            fmin = float(self._F_min_ok.get().replace(",","."))
+            fmax = float(self._F_max_ok.get().replace(",","."))
+            if fmin > 0 or fmax > 0:
+                ax.axhspan(fmin, fmax, color=GREEN, alpha=0.10, label=f"Janela OK ({fmin:.0f}-{fmax:.0f} kN)")
+                ax.axhline(fmin, color=GREEN,  linewidth=0.8, linestyle="--")
+                ax.axhline(fmax, color=ORANGE, linewidth=0.8, linestyle="--")
+        except (ValueError, AttributeError):
+            pass
+
+        ax.set_xlabel("Posicao [mm]", color=FG_DIM, fontsize=8)
+        ax.set_ylabel("Forca [kN]",   color=FG_DIM, fontsize=8)
+        ax.set_title("Curva de Forca — Dados Reais", color=FG, fontsize=9, pad=6)
+        ax.legend(fontsize=7, facecolor=BG2, edgecolor=BORDER, labelcolor=FG)
+        self._fig2.tight_layout(pad=2.0)
+        self._canvas_interf.draw()
 
     def _plotar_comparativo(self, p, r):
         pass  # implementacao completa no codigo original
@@ -1433,6 +1560,11 @@ class AbaInterferencia(tk.Frame):
 # App principal com abas
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _resource(name):
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, name)
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -1441,7 +1573,34 @@ class App(tk.Tk):
         self.resizable(True, True)
         self.minsize(1100, 600)
         self.ra_sede_cal = None
+        self._tray = None
         self._build_ui()
+        self._setup_tray()
+        self.protocol("WM_DELETE_WINDOW", self._para_tray)
+
+    def _setup_tray(self):
+        try:
+            img = Image.open(_resource("stellantis.ico")).resize((64, 64), Image.LANCZOS).convert("RGBA")
+        except Exception:
+            img = Image.new("RGBA", (64, 64), (72, 200, 120, 255))
+        menu = pystray.Menu(
+            TrayItem("Abrir",  self._mostrar, default=True),
+            pystray.Menu.SEPARATOR,
+            TrayItem("Sair",   self._sair),
+        )
+        self._tray = pystray.Icon("rugosidade", img, "Estimador de Rugosidade — Stellantis", menu)
+        threading.Thread(target=self._tray.run, daemon=True).start()
+
+    def _mostrar(self, *_):
+        self.after(0, lambda: (self.deiconify(), self.lift(), self.focus_force()))
+
+    def _para_tray(self):
+        self.withdraw()
+
+    def _sair(self, *_):
+        if self._tray:
+            self._tray.stop()
+        self.after(0, self.destroy)
 
     def _build_ui(self):
         hdr=tk.Frame(self,bg=BG,padx=20,pady=10)

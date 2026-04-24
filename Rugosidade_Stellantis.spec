@@ -4,12 +4,14 @@ a = Analysis(
     ['roughness_testes.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('stellantis.ico', '.')],
     hiddenimports=[
         'PIL._tkinter_finder',
         'reportlab.graphics.barcode.common',
         'reportlab.graphics.barcode.code39',
         'scipy.ndimage._ni_support',
+        'pystray._win32',
+        'pystray',
     ],
     hookspath=[],
     hooksconfig={},
@@ -40,5 +42,4 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='stellantis.ico',
-    version_file=None,
 )
