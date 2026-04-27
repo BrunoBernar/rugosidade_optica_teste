@@ -22,7 +22,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from scipy.ndimage import sobel
-import os, io, datetime
+import os, io, datetime, math
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -191,53 +191,24 @@ def classificar(ra_um):
     return                   "N10+ - Superficie bruta",             "#b71c1c"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Calculo de interferencia (Lame)
+# Calculo de interferencia — Stellantis Knuckle (Lame)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def calcular_interferencia(p):
-    d=p["d"]; L=p["L"]; De=p["De"]; di=p["di"]
-    delta_nom=p["delta_nom"]
-    E_m=p["E_manga"]; nu_m=p["nu_manga"]; Sy_m=p["Sy_manga"]
-    E_r=p["E_rol"];   nu_r=p["nu_rol"];   Sy_r=p["Sy_rol"]
-    Ra_s=p["Ra_sede"]; Ra_r=p["Ra_rol"]; k_rz=p["k_rz"]; mu=p["mu"]
+def lame_pressure(delta_mm, R_m, Eo_GPa, ro_m, vo, Ei_GPa, ri_m, vi):
+    """Pressao de interferencia pela equacao de Lame [MPa]."""
+    delta_m = delta_mm * 1e-3
+    Eo_Pa   = Eo_GPa  * 1e9
+    Ei_Pa   = Ei_GPa  * 1e9
+    hub_term   = (1 / Eo_Pa) * ((ro_m**2 + R_m**2) / (ro_m**2 - R_m**2) + vo)
+    shaft_term = (1 / Ei_Pa) * ((R_m**2 + ri_m**2) / (R_m**2 - ri_m**2) - vi)
+    p_Pa = delta_m / (R_m * (hub_term + shaft_term))
+    return p_Pa / 1e6
 
-    Rz_sede = 4.0 * Ra_s
-    Rz_rol  = 4.0 * Ra_r
-    delta_ef_um = delta_nom - k_rz * (Rz_sede + Rz_rol)
-    delta_ef_mm = delta_ef_um / 1000.0
-
-    if delta_ef_mm <= 0:
-        raise ValueError(
-            f"Interferencia efetiva negativa ({delta_ef_um:.2f} µm).\n"
-            f"A rugosidade consome toda a interferencia nominal.\n"
-            f"Reduza a rugosidade ou aumente a interferencia nominal.")
-
-    C_m = (De**2 + d**2) / (De**2 - d**2) + nu_m
-    C_r = (1.0 - nu_r) if di <= 0 else (d**2 + di**2) / (d**2 - di**2) - nu_r
-
-    pressao = delta_ef_mm / (d * (C_m / E_m + C_r / E_r))
-    F = mu * pressao * np.pi * d * L
-
-    s_t_m  = pressao * (De**2 + d**2) / (De**2 - d**2)
-    s_r_m  = -pressao
-    s_VM_m = np.sqrt(s_t_m**2 - s_t_m * s_r_m + s_r_m**2)
-
-    if di <= 0:
-        s_t_r = -pressao; s_r_r = -pressao; s_VM_r = pressao
-    else:
-        s_t_r  = -pressao * (d**2 + di**2) / (d**2 - di**2)
-        s_r_r  = -pressao
-        s_VM_r = np.sqrt(s_t_r**2 - s_t_r * s_r_r + s_r_r**2)
-
-    FS_m = Sy_m / s_VM_m if s_VM_m > 0 else float("inf")
-    FS_r = Sy_r / s_VM_r if s_VM_r > 0 else float("inf")
-
-    return dict(delta_nom=delta_nom, Rz_sede=Rz_sede, Rz_rol=Rz_rol,
-                delta_ef=delta_ef_um, delta_ef_mm=delta_ef_mm,
-                pressao=pressao, F_N=F, F_kN=F/1000,
-                s_t_m=s_t_m, s_VM_m=s_VM_m,
-                s_t_r=s_t_r, s_VM_r=s_VM_r,
-                FS_m=FS_m, FS_r=FS_r, C_m=C_m, C_r=C_r)
+def engagement_force(pressure_MPa, area_mm2, mu):
+    """Forca de encaixe F = p x A x mu. Retorna (N, kgf)."""
+    F_N   = pressure_MPa * area_mm2 * mu
+    F_kgf = F_N / 9.81
+    return F_N, F_kgf
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Widgets auxiliares
@@ -718,39 +689,10 @@ class AbaRugosidade(tk.Frame):
 # Presets de material e atrito
 # ─────────────────────────────────────────────────────────────────────────────
 
-MATERIAIS = {
-    "Aco SAE 1045":      dict(E=210000, nu=0.30, Sy=355),
-    "Aco SAE 4340":      dict(E=210000, nu=0.30, Sy=470),
-    "Aco inox 316":      dict(E=193000, nu=0.27, Sy=290),
-    "FF Nodular D600C":  dict(E=170000, nu=0.28, Sy=370),
-    "FF Nodular D400":   dict(E=170000, nu=0.28, Sy=250),
-    "FF Cinzento GH190": dict(E=120000, nu=0.26, Sy=190),
-    "Rolamento (52100)": dict(E=210000, nu=0.30, Sy=1500),
-    "Personalizado":     dict(E=210000, nu=0.30, Sy=355),
-}
-
-MU_TABLE = {
-    ("aco", "aco", "seco"): 0.13, ("aco", "aco", "oleo"): 0.06,
-    ("aco", "ff",  "seco"): 0.12, ("aco", "ff",  "oleo"): 0.06,
-    ("ff",  "aco", "seco"): 0.12, ("ff",  "aco", "oleo"): 0.06,
-    ("ff",  "ff",  "seco"): 0.10, ("ff",  "ff",  "oleo"): 0.05,
-}
-
-def _grupo(nome):
-    n = nome.lower()
-    return "ff" if any(x in n for x in ["ff","fundido","cinzento","nodular"]) else "aco"
-
-def mu_auto(nm, nr, cond):
-    g1,g2 = _grupo(nm), _grupo(nr)
-    return MU_TABLE.get((g1,g2,cond), MU_TABLE.get((g2,g1,cond), 0.12))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Aba 2 — Calculo de Interferencia
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Aba 2 — Calculo de Interferencia
+# Aba 2 — Calculo de Interferencia (Stellantis Knuckle)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class AbaInterferencia(tk.Frame):
@@ -758,546 +700,400 @@ class AbaInterferencia(tk.Frame):
         super().__init__(parent, bg=BG, **kw)
         self._app = app_ref
         self._resultado = None
-        self._cond_used = "seco"
-        self._mat_manga = "FF Nodular D600C"
-        self._mat_rol   = "Rolamento (52100)"
-        self._delta_lbl = "nominal"
-        self._d_min_um = self._d_max_um = self._d_nom_um = 0
         self._build()
 
     def _build(self):
         scroller = ScrollableFrame(self)
         scroller.pack(fill="both", expand=True)
-        W = scroller.inner   # alias
+        W = scroller.inner
 
         PAD = dict(padx=20, pady=6)
 
-        # ══════════════════════════════════════════════════════════════════════
-        # Cabecalho da aba
-        # ══════════════════════════════════════════════════════════════════════
+        # ── Cabecalho ─────────────────────────────────────────────────────────
         hdr = tk.Frame(W, bg=BG2)
         hdr.pack(fill="x", padx=0, pady=(0,8))
-        tk.Label(hdr, text="  CALCULO DE INTERFERENCIA — ROLAMENTO / MANGA DE EIXO",
+        tk.Label(hdr, text="  KNUCKLE INTERFERENCE CALCULATOR — Stellantis",
                  bg=BG2, fg=PURPLE, font=("Courier",10,"bold"),
                  anchor="w", pady=8).pack(side="left")
-        tk.Label(hdr,
-                 text="Equacoes de Lame  |  VDI 2230  |  ISO 286  ",
+        tk.Label(hdr, text="Equacoes de Lame  |  Cilindros de parede grossa  ",
                  bg=BG2, fg=FG_DIM, font=("Helvetica",8),
                  anchor="e").pack(side="right")
 
-        # ══════════════════════════════════════════════════════════════════════
-        # SECAO 1 — INPUTS (duas colunas lado a lado)
-        # ══════════════════════════════════════════════════════════════════════
+        # ── INPUTS — 3 colunas: Eixo | Cubo | Geometria+Atrito ──────────────────
         sec_in = tk.Frame(W, bg=BG)
         sec_in.pack(fill="x", **PAD)
 
         col_a = tk.Frame(sec_in, bg=BG)
         col_a.pack(side="left", fill="both", expand=True, padx=(0,10))
-
         col_b = tk.Frame(sec_in, bg=BG)
-        col_b.pack(side="left", fill="both", expand=True)
+        col_b.pack(side="left", fill="both", expand=True, padx=(0,10))
+        col_c = tk.Frame(sec_in, bg=BG)
+        col_c.pack(side="left", fill="both", expand=True)
 
-        # ── COL A: Geometria + Tolerancias manga ──────────────────────────────
+        # ── COL A: Eixo (Shaft) ─────────────────────────────────────────────
+        ef, ei_f = frame_card(col_a, "Eixo (Shaft)")
+        ef.pack(fill="x", pady=(0,6))
+        tk.Label(ei_f, text="Parte INTERNA — eixo vazado",
+                 bg=BG3, fg=GOLD, font=("Courier",8,"bold"),
+                 anchor="w", padx=6, pady=4).pack(fill="x", pady=(0,4))
+        self._Ei  = entry_row(ei_f, "Young Ei        [GPa]",  "210.0",  cor=GOLD)
+        self._vi  = entry_row(ei_f, "Poisson vi",              "0.27",   cor=GOLD)
+        self._di  = entry_row(ei_f, "Diam. interno di [mm]",  "40.291", cor=GOLD)
+        self._d   = entry_row(ei_f, "Diam. nominal d  [mm]",  "78.0",   cor=GOLD)
+        tk.Label(ei_f, text="Tolerancias do eixo:", bg=BG, fg=FG_DIM,
+                 font=("Helvetica",8)).pack(anchor="w", pady=(6,0))
+        self._tol_sh_up = entry_row(ei_f, "Desvio superior [mm]", "+0.040", cor=GOLD)
+        self._tol_sh_lo = entry_row(ei_f, "Desvio inferior [mm]", "-0.013", cor=GOLD)
+        self._lbl_shaft = tk.Label(ei_f, text="", bg=BG2, fg=GOLD,
+                                   font=("Courier",8), anchor="w", padx=6, pady=3)
+        self._lbl_shaft.pack(fill="x", pady=(3,0))
 
-        gf,gi = frame_card(col_a, "Geometria do ajuste")
-        gf.pack(fill="x", pady=(0,6))
-        tk.Label(gi,
-            text="MANGA (furo — externa)  recebe  ROLAMENTO OD (interna)",
-            bg=BG3, fg=ACCENT, font=("Courier",8,"bold"),
-            anchor="w", padx=6, pady=5).pack(fill="x", pady=(0,4))
-        self._d  = entry_row(gi, "Diam. nominal interface d  [mm]", "78.0",  cor=ACCENT)
-        self._L  = entry_row(gi, "Comprimento ajuste L       [mm]", "38.0",  cor=ACCENT)
-        self._De = entry_row(gi, "Diam. ext. da manga De     [mm]", "81.65", cor=ACCENT)
-        self._di = entry_row(gi, "Diam. int. anel ext. di    [mm]", "72.77", cor=ACCENT)
-        tk.Label(gi,
-            text="di = diam. interno do anel externo do rolamento (do desenho).\n"
-                 "di = 0 somente se o anel for macico.",
-            bg=BG, fg=FG_DIM, font=("Helvetica",7),
-            justify="left").pack(fill="x", pady=(2,0))
+        # ── COL B: Cubo (Hub) ─────────────────────────────────────────────────
+        hf, hi_f = frame_card(col_b, "Cubo (Hub / Knuckle)")
+        hf.pack(fill="x", pady=(0,6))
+        tk.Label(hi_f, text="Parte EXTERNA — cubo / knuckle",
+                 bg=BG3, fg=ACCENT, font=("Courier",8,"bold"),
+                 anchor="w", padx=6, pady=4).pack(fill="x", pady=(0,4))
+        self._Eo  = entry_row(hi_f, "Young Eo        [GPa]",  "156.96", cor=ACCENT)
+        self._vo  = entry_row(hi_f, "Poisson vo",              "0.27",   cor=ACCENT)
+        self._do  = entry_row(hi_f, "Diam. externo do [mm]",  "81.65",  cor=ACCENT)
+        self._dh  = entry_row(hi_f, "Diam. nominal furo [mm]","78.0",   cor=ACCENT)
+        tk.Label(hi_f, text="Tolerancias do furo:", bg=BG, fg=FG_DIM,
+                 font=("Helvetica",8)).pack(anchor="w", pady=(6,0))
+        self._tol_ho_up = entry_row(hi_f, "Desvio superior [mm]", "-0.083", cor=ACCENT)
+        self._tol_ho_lo = entry_row(hi_f, "Desvio inferior [mm]", "-0.113", cor=ACCENT)
+        self._lbl_hub = tk.Label(hi_f, text="", bg=BG2, fg=ACCENT,
+                                 font=("Courier",8), anchor="w", padx=6, pady=3)
+        self._lbl_hub.pack(fill="x", pady=(3,0))
 
-        sf,si = frame_card(col_a, "Tolerancias — Furo da manga  (parte EXTERNA)")
-        sf.pack(fill="x", pady=(0,6))
-        tk.Label(si,
-            text="O furo da manga RECEBE o rolamento. O furo e MENOR que o OD.\n"
-                 "Ex. do desenho:  O78 -0.083 / -0.113\n"
-                 "  es = -0.083   ei = -0.113\n"
-                 "  Furo entre 77.887 e 77.917 mm",
-            bg=BG, fg=FG_DIM, font=("Helvetica",7),
-            justify="left", wraplength=380).pack(fill="x", pady=(0,4))
-        self._sede_d  = entry_row(si, "Diam. nominal furo manga   [mm]", "78.0",   cor=ACCENT)
-        self._sede_es = entry_row(si, "Desvio superior es         [mm]", "-0.083", cor=ACCENT)
-        self._sede_ei = entry_row(si, "Desvio inferior ei         [mm]", "-0.113", cor=ACCENT)
-        self._lbl_sede_calc = tk.Label(si, text="", bg=BG2, fg=GREEN,
-                                       font=("Courier",8), anchor="w", padx=6, pady=3)
-        self._lbl_sede_calc.pack(fill="x", pady=(3,0))
+        # ── COL C: Geometria + Atrito ─────────────────────────────────────────
+        gf2, gi_f = frame_card(col_c, "Geometria da interface")
+        gf2.pack(fill="x", pady=(0,6))
+        self._w_nom = entry_row(gi_f, "Largura nominal [mm]", "37.88", cor=FG)
+        self._w_lo  = entry_row(gi_f, "Largura minima  [mm]", "33.80", cor=FG)
+        self._w_up  = entry_row(gi_f, "Largura maxima  [mm]", "38.00", cor=FG)
 
-        # ── COL B: Tolerancias rolamento + materiais ──────────────────────────
+        af, ai_f = frame_card(col_c, "Coeficientes de atrito")
+        af.pack(fill="x", pady=(0,6))
+        tk.Label(ai_f, text="Calculados simultaneamente (seco e lubrificado):",
+                 bg=BG, fg=FG_DIM, font=("Helvetica",7)).pack(anchor="w", pady=(0,4))
+        self._mu_dry   = entry_row(ai_f, "mu seco   (dry)",   "0.40", cor=RED)
+        self._mu_lubed = entry_row(ai_f, "mu lubr.  (lubed)", "0.21", cor=GREEN)
+        tk.Label(ai_f, text="Ref. Stellantis: seco=0.40  lubr.=0.21",
+                 bg=BG, fg=FG_DIM, font=("Helvetica",7)).pack(fill="x", pady=(4,0))
 
-        rf2,ri3 = frame_card(col_b, "Tolerancias — OD anel externo rolamento  (parte INTERNA)")
-        rf2.pack(fill="x", pady=(0,6))
-        tk.Label(ri3,
-            text="O OD do rolamento e MAIOR que o furo da manga — gera interferencia.\n"
-                 "Ex. do desenho:  O78.03 -0.014 / -0.027\n"
-                 "  ES = -0.014   EI = -0.027\n"
-                 "  OD entre 78.003 e 78.016 mm",
-            bg=BG, fg=FG_DIM, font=("Helvetica",7),
-            justify="left", wraplength=380).pack(fill="x", pady=(0,4))
-        self._rol_D  = entry_row(ri3, "Diam. nominal OD rolamento [mm]", "78.03",  cor=GOLD)
-        self._rol_ES = entry_row(ri3, "Desvio superior ES         [mm]", "-0.014", cor=GOLD)
-        self._rol_EI = entry_row(ri3, "Desvio inferior EI         [mm]", "-0.027", cor=GOLD)
-        self._lbl_rol_calc = tk.Label(ri3, text="", bg=BG2, fg=GOLD,
-                                      font=("Courier",8), anchor="w", padx=6, pady=3)
-        self._lbl_rol_calc.pack(fill="x", pady=(3,0))
-
-        mf2,mi2 = frame_card(col_b, "Material — Manga / Sede")
-        mf2.pack(fill="x", pady=(0,6))
-        self._mat_manga_var = tk.StringVar(value="FF Nodular D600C")
-        cb_m = ttk.Combobox(mi2, textvariable=self._mat_manga_var,
-                            values=list(MATERIAIS.keys()),
-                            state="readonly", font=("Helvetica",9))
-        cb_m.pack(fill="x", pady=(0,4)); cb_m.bind("<<ComboboxSelected>>", self._on_mat_manga)
-        self._E_m  = entry_row(mi2, "Modulo E      [MPa]",       "170000", cor=ACCENT)
-        self._nu_m = entry_row(mi2, "Poisson nu",                 "0.28",   cor=ACCENT)
-        self._Sy_m = entry_row(mi2, "Tensao escoa. Sy   [MPa]",   "370",    cor=ACCENT)
-
-        rf3,ri4 = frame_card(col_b, "Material — Anel externo do rolamento")
-        rf3.pack(fill="x", pady=(0,6))
-        self._mat_rol_var = tk.StringVar(value="Rolamento (52100)")
-        cb_r = ttk.Combobox(ri4, textvariable=self._mat_rol_var,
-                            values=list(MATERIAIS.keys()),
-                            state="readonly", font=("Helvetica",9))
-        cb_r.pack(fill="x", pady=(0,4)); cb_r.bind("<<ComboboxSelected>>", self._on_mat_rol)
-        self._E_r  = entry_row(ri4, "Modulo E      [MPa]",       "210000", cor=GOLD)
-        self._nu_r = entry_row(ri4, "Poisson nu",                 "0.30",   cor=GOLD)
-        self._Sy_r = entry_row(ri4, "Tensao escoa. Sy   [MPa]",   "1500",   cor=GOLD)
-
-        # ══════════════════════════════════════════════════════════════════════
-        # SECAO 2 — RUGOSIDADE + CONDICAO (duas colunas)
-        # ══════════════════════════════════════════════════════════════════════
-        sec_rug = tk.Frame(W, bg=BG)
-        sec_rug.pack(fill="x", **PAD)
-
-        col_c = tk.Frame(sec_rug, bg=BG)
-        col_c.pack(side="left", fill="both", expand=True, padx=(0,10))
-        col_d = tk.Frame(sec_rug, bg=BG)
-        col_d.pack(side="left", fill="both", expand=True)
-
-        rugf,rugi = frame_card(col_c, "Rugosidade das superficies")
-        rugf.pack(fill="x", pady=(0,0))
-        self._Ra_sede = entry_row(rugi, "Ra furo manga        [µm]", "6.3", cor=ACCENT)
-        self._Ra_rol  = entry_row(rugi, "Ra OD rolamento      [µm]", "0.4", cor=GOLD)
-        self._k_rz    = entry_row(rugi, "Fator alisamento k_Rz",     "0.8", cor=FG_DIM)
-        tk.Button(rugi, text="Importar Ra da Aba 1 (analise de imagem)",
-                  command=self._importar_ra,
-                  bg=BG2, fg=ACCENT, font=FONT_MONO, relief="flat",
-                  pady=4, cursor="hand2",
-                  activebackground=BG, activeforeground=ACCENT).pack(fill="x", pady=(4,0))
-        self._lbl_import = tk.Label(rugi, text="", bg=BG, fg=GREEN,
-                                    font=("Courier",7), anchor="w")
-        self._lbl_import.pack(fill="x")
-        tk.Label(rugi,
-            text="Rz estimado = 4 x Ra  |  k_Rz = 0.6 a 0.8 (VDI 2230)",
-            bg=BG, fg=FG_DIM, font=("Helvetica",7)).pack(fill="x", pady=(3,0))
-
-        cf2,ci2 = frame_card(col_d, "Condicao de montagem")
-        cf2.pack(fill="x", pady=(0,0))
-        self._cond_var = tk.StringVar(value="seco")
-        for val,lbl,cor in [("seco","  A SECO  (sem lubrificante)",ACCENT),
-                             ("oleo","  COM OLEO / GRAXA",GOLD)]:
-            tk.Radiobutton(ci2, text=lbl, variable=self._cond_var,
-                           value=val, bg=BG, fg=cor, selectcolor=BG2,
-                           activebackground=BG, activeforeground=cor,
-                           font=("Courier",10,"bold"),
-                           command=self._on_cond_change).pack(anchor="w", pady=2)
-        self._mu = entry_row(ci2, "µ  (atrito estatico)", "0.12", cor=ACCENT)
-        self._lbl_mu_hint = tk.Label(ci2, text="", bg=BG, fg=FG_DIM,
-                                     font=("Helvetica",7), anchor="w")
-        self._lbl_mu_hint.pack(fill="x")
-        tk.Label(ci2,
-            text="Seco  — Aco/Aco: 0.12-0.15  |  Aco/FF: 0.10-0.14\n"
-                 "Oleo  — Aco/Aco: 0.05-0.08  |  Aco/FF: 0.04-0.07",
-            bg=BG, fg=FG_DIM, font=("Helvetica",7),
-            justify="left").pack(fill="x", pady=(4,0))
-
-        # ══════════════════════════════════════════════════════════════════════
-        # SECAO 3 — BOTOES + DELTA PREVIEW (largura total)
-        # ══════════════════════════════════════════════════════════════════════
-        sec_btn = tk.Frame(W, bg=BG)
-        sec_btn.pack(fill="x", **PAD)
-
-        col_e = tk.Frame(sec_btn, bg=BG)
-        col_e.pack(side="left", fill="both", expand=True, padx=(0,10))
-        col_f = tk.Frame(sec_btn, bg=BG)
-        col_f.pack(side="left", fill="both", expand=True)
-
-        # Pre-visualizacao da interferencia
-        prev_f, prev_i = frame_card(col_e, "Pre-visualizacao das tolerancias")
-        prev_f.pack(fill="x")
-        tk.Button(prev_i,
-            text="Calcular faixa de interferencia das tolerancias",
-            command=self._preview_interferencia,
-            bg=BG2, fg=ACCENT, font=("Courier",9,"bold"), relief="flat",
-            pady=5, cursor="hand2",
-            activebackground=BG, activeforeground=ACCENT).pack(fill="x", pady=(0,6))
-        self._v_dmin = tk.StringVar(value="—")
-        self._v_dnom = tk.StringVar(value="—")
-        self._v_dmax = tk.StringVar(value="—")
-        result_row(prev_i, "δ minima  (pior caso)      [µm]", self._v_dmin, cor=ORANGE)
-        result_row(prev_i, "δ nominal (media)          [µm]", self._v_dnom, cor=GREEN)
-        result_row(prev_i, "δ maxima  (melhor caso)    [µm]", self._v_dmax, cor=ACCENT)
-        self._lbl_delta_aviso = tk.Label(prev_i, text="", bg=BG, fg=FG_DIM,
-                                         font=("Courier",7), anchor="w")
-        self._lbl_delta_aviso.pack(fill="x", pady=(2,0))
-
-        # Selecao + botoes
-        sel_f, sel_i = frame_card(col_f, "Usar para calculo + Acoes")
-        sel_f.pack(fill="x")
-        self._delta_choice = tk.StringVar(value="nominal")
-        for val,lbl in [("minima", "δ minima — pior caso (menor forca)"),
-                        ("nominal","δ nominal — valor medio"),
-                        ("maxima", "δ maxima — maior forca de montagem")]:
-            tk.Radiobutton(sel_i, text=lbl, variable=self._delta_choice,
-                           value=val, bg=BG, fg=FG, selectcolor=BG2,
-                           activebackground=BG, activeforeground=ACCENT,
-                           font=("Helvetica",9)).pack(anchor="w")
-
-        self._btn_calc = tk.Button(sel_i,
-            text="▶  CALCULAR INTERFERENCIA",
-            command=self._calcular,
-            bg=BG2, fg=PURPLE, font=("Courier",11,"bold"),
-            relief="flat", pady=10, cursor="hand2",
+        # ── Botao calcular ────────────────────────────────────────────────────
+        btn_frame = tk.Frame(W, bg=BG)
+        btn_frame.pack(fill="x", padx=20, pady=(4,4))
+        self._btn_calc = tk.Button(btn_frame, text=">>  CALCULAR INTERFERENCIA",
+            command=self._calcular, bg=BG2, fg=PURPLE,
+            font=("Courier",11,"bold"), relief="flat", pady=10, cursor="hand2",
             activebackground=BG, activeforeground=PURPLE)
-        self._btn_calc.pack(fill="x", pady=(8,4))
+        self._btn_calc.pack(fill="x")
 
-        self._btn_pdf2 = tk.Button(sel_i,
-            text="Exportar PDF",
-            command=self._exportar_pdf,
-            bg=BG2, fg=GOLD, font=("Courier",10,"bold"),
-            relief="flat", pady=6, cursor="hand2",
-            activebackground=BG, activeforeground=GOLD,
-            state="disabled")
-        self._btn_pdf2.pack(fill="x")
-
-        # ══════════════════════════════════════════════════════════════════════
-        # SECAO 4 — RESULTADOS (largura total, fundo destacado)
-        # ══════════════════════════════════════════════════════════════════════
-        tk.Frame(W, bg=PURPLE, height=2).pack(fill="x", padx=20, pady=(10,0))
+        # ── Cabecalho de resultados ───────────────────────────────────────────
+        tk.Frame(W, bg=PURPLE, height=2).pack(fill="x", padx=20, pady=(6,0))
         res_hdr = tk.Frame(W, bg=BG2)
         res_hdr.pack(fill="x", padx=0)
-        tk.Label(res_hdr,
-            text="  RESULTADOS DO CALCULO",
-            bg=BG2, fg=PURPLE, font=("Courier",11,"bold"),
-            anchor="w", pady=6).pack(side="left")
-        self._lbl_delta_usado = tk.Label(res_hdr, text="  aguardando calculo...",
-                                          bg=BG2, fg=FG_DIM,
-                                          font=("Courier",8), anchor="w")
-        self._lbl_delta_usado.pack(side="left")
+        tk.Label(res_hdr, text="  RESULTADOS",
+                 bg=BG2, fg=PURPLE, font=("Courier",11,"bold"),
+                 anchor="w", pady=6).pack(side="left")
+        self._lbl_status = tk.Label(res_hdr, text="  aguardando calculo...",
+                                    bg=BG2, fg=FG_DIM, font=("Courier",8), anchor="w")
+        self._lbl_status.pack(side="left")
 
-        # Resultados em 3 colunas
+        # ── Resultados em 3 colunas ───────────────────────────────────────────
         sec_res = tk.Frame(W, bg=BG)
         sec_res.pack(fill="x", **PAD)
+        rc1 = tk.Frame(sec_res, bg=BG)
+        rc1.pack(side="left", fill="both", expand=True, padx=(0,8))
+        rc2 = tk.Frame(sec_res, bg=BG)
+        rc2.pack(side="left", fill="both", expand=True, padx=(0,8))
+        rc3 = tk.Frame(sec_res, bg=BG)
+        rc3.pack(side="left", fill="both", expand=True)
 
-        rc1 = tk.Frame(sec_res, bg=BG); rc1.pack(side="left", fill="both", expand=True, padx=(0,8))
-        rc2 = tk.Frame(sec_res, bg=BG); rc2.pack(side="left", fill="both", expand=True, padx=(0,8))
-        rc3 = tk.Frame(sec_res, bg=BG); rc3.pack(side="left", fill="both", expand=True)
+        # Col 1: Diametros + Interferencias
+        df, di2 = frame_card(rc1, "Diametros calculados")
+        df.pack(fill="x", pady=(0,6))
+        self._v_sh_max = tk.StringVar(value="---"); self._v_sh_min = tk.StringVar(value="---")
+        self._v_ho_max = tk.StringVar(value="---"); self._v_ho_min = tk.StringVar(value="---")
+        result_row(di2, "Eixo maximo        [mm]", self._v_sh_max, cor=GOLD)
+        result_row(di2, "Eixo minimo        [mm]", self._v_sh_min, cor=GOLD)
+        result_row(di2, "Furo maximo        [mm]", self._v_ho_max, cor=ACCENT)
+        result_row(di2, "Furo minimo        [mm]", self._v_ho_min, cor=ACCENT)
+        if2, ii2 = frame_card(rc1, "Interferencia radial")
+        if2.pack(fill="x")
+        self._v_dmax = tk.StringVar(value="---"); self._v_dmin = tk.StringVar(value="---")
+        result_row(ii2, "dmax - pior caso   [mm]", self._v_dmax, cor=ORANGE)
+        result_row(ii2, "dmin - melhor caso [mm]", self._v_dmin, cor=GREEN)
 
-        # Coluna 1 — Interferencia
-        if2,ii2 = frame_card(rc1, "Interferencia")
-        if2.pack(fill="x", pady=(0,6))
-        self._v_delta_nom2 = tk.StringVar(value="—")
-        self._v_rz_sede    = tk.StringVar(value="—")
-        self._v_rz_rol     = tk.StringVar(value="—")
-        self._v_delta_ef   = tk.StringVar(value="—")
-        result_row(ii2, "δ usada             [µm]", self._v_delta_nom2)
-        result_row(ii2, "Rz furo manga       [µm]", self._v_rz_sede,  cor=ACCENT)
-        result_row(ii2, "Rz OD rolamento     [µm]", self._v_rz_rol,   cor=GOLD)
-        result_row(ii2, "δ EFETIVA           [µm]", self._v_delta_ef, cor=GREEN)
+        # Col 2: Pressoes + Areas
+        pf, pi2 = frame_card(rc2, "Pressao de contato (Lame)")
+        pf.pack(fill="x", pady=(0,6))
+        self._v_pmax = tk.StringVar(value="---"); self._v_pmin = tk.StringVar(value="---")
+        result_row(pi2, "pmax  (dmax)       [MPa]", self._v_pmax, cor=ORANGE)
+        result_row(pi2, "pmin  (dmin)       [MPa]", self._v_pmin, cor=GREEN)
+        af2, ai2 = frame_card(rc2, "Areas de contato  A = pi x d x w")
+        af2.pack(fill="x")
+        self._v_A_nom = tk.StringVar(value="---")
+        self._v_A_lo  = tk.StringVar(value="---")
+        self._v_A_up  = tk.StringVar(value="---")
+        result_row(ai2, "A nominal          [mm2]", self._v_A_nom, cor=FG)
+        result_row(ai2, "A lower            [mm2]", self._v_A_lo,  cor=FG_DIM)
+        result_row(ai2, "A upper            [mm2]", self._v_A_up,  cor=FG_DIM)
 
-        # Coluna 1 — Pressao e forca
-        pf2,pi2 = frame_card(rc1, "Pressao e Forca")
-        pf2.pack(fill="x")
-        self._v_pressao = tk.StringVar(value="—")
-        self._v_F_kN    = tk.StringVar(value="—")
-        self._v_F_N     = tk.StringVar(value="—")
-        result_row(pi2, "Pressao p     [MPa]", self._v_pressao, cor=PURPLE)
-        result_row(pi2, "Forca F       [kN]",  self._v_F_kN,   cor=PURPLE)
-        result_row(pi2, "Forca F       [N]",   self._v_F_N,    cor=FG_DIM)
+        # Col 3: Tabela de forcas
+        ff, fi2 = frame_card(rc3, "Forca de encaixe / desencaixe")
+        ff.pack(fill="x")
+        tk.Label(fi2, text="p = pmax  (eixo max / furo min)",
+                 bg=BG, fg=FG_DIM, font=("Helvetica",7)).pack(anchor="w", pady=(0,4))
+        th = tk.Frame(fi2, bg=BG2)
+        th.pack(fill="x")
+        th.columnconfigure((0,1,2,3,4), weight=1)
+        for ci_h, h in enumerate(["Caso","Seco [N]","Seco[kgf]","Lubr [N]","Lubr[kgf]"]):
+            tk.Label(th, text=h, bg=BG2, fg=FG_DIM, font=FONT_SMALL,
+                     anchor="center", padx=2, pady=3).grid(row=0, column=ci_h, sticky="ew")
+        self._force_vars = {}
+        for ri_f, (key, label, cor) in enumerate([
+            ("nominal","Nominal",FG), ("lower","Lower",FG_DIM), ("upper","Upper",FG_DIM)
+        ]):
+            row_bg = BG3 if ri_f % 2 == 0 else BG
+            rf = tk.Frame(fi2, bg=row_bg)
+            rf.pack(fill="x")
+            rf.columnconfigure((0,1,2,3,4), weight=1)
+            tk.Label(rf, text=label, bg=row_bg, fg=cor,
+                     font=FONT_SMALL, anchor="w", padx=4, pady=3).grid(row=0, column=0, sticky="ew")
+            for ci_f, vk in enumerate(["dry_N","dry_kgf","lubed_N","lubed_kgf"]):
+                v = tk.StringVar(value="---")
+                self._force_vars[(key, vk)] = v
+                tk.Label(rf, textvariable=v, bg=row_bg, fg=cor,
+                         font=FONT_SMALL, anchor="center", pady=3).grid(row=0, column=ci_f+1, sticky="ew")
+        avg_f = tk.Frame(fi2, bg=BG2)
+        avg_f.pack(fill="x", pady=(4,0))
+        avg_f.columnconfigure((0,1,2), weight=1)
+        tk.Label(avg_f, text="Media nominal (dry+lubed)/2:", bg=BG2, fg=PURPLE,
+                 font=FONT_SMALL, anchor="w", padx=4, pady=3).grid(row=0, column=0, sticky="ew")
+        self._v_avg_N   = tk.StringVar(value="---")
+        self._v_avg_kgf = tk.StringVar(value="---")
+        tk.Label(avg_f, textvariable=self._v_avg_N,   bg=BG2, fg=PURPLE,
+                 font=("Courier",9,"bold"), anchor="center").grid(row=0, column=1, sticky="ew")
+        tk.Label(avg_f, textvariable=self._v_avg_kgf, bg=BG2, fg=PURPLE,
+                 font=("Courier",9,"bold"), anchor="center").grid(row=0, column=2, sticky="ew")
 
-        # Coluna 2 — Tensoes
-        tf2,ti2 = frame_card(rc2, "Tensoes nas pecas")
-        tf2.pack(fill="x", pady=(0,6))
-        self._v_st_m = tk.StringVar(value="—"); self._v_vm_m = tk.StringVar(value="—")
-        self._v_st_r = tk.StringVar(value="—"); self._v_vm_r = tk.StringVar(value="—")
-        result_row(ti2, "Hoop manga (int.) [MPa]", self._v_st_m,  cor=ACCENT)
-        result_row(ti2, "Von Mises manga   [MPa]", self._v_vm_m,  cor=ACCENT)
-        result_row(ti2, "Hoop rolamento    [MPa]", self._v_st_r,  cor=GOLD)
-        result_row(ti2, "Von Mises rolam.  [MPa]", self._v_vm_r,  cor=GOLD)
-
-        # Coluna 3 — Fatores de seguranca
-        sf2,si2 = frame_card(rc3, "Fatores de seguranca  (Sy / Von Mises)")
-        sf2.pack(fill="x")
-        self._v_FS_m = tk.StringVar(value="—"); self._v_FS_r = tk.StringVar(value="—")
-        self._lbl_FS_m_sem = tk.Label(si2, text="", bg=BG,
-                                      font=("Courier",9,"bold"), anchor="w")
-        self._lbl_FS_r_sem = tk.Label(si2, text="", bg=BG,
-                                      font=("Courier",9,"bold"), anchor="w")
-        result_row(si2, "FS manga",    self._v_FS_m, cor=FG)
-        self._lbl_FS_m_sem.pack(fill="x")
-        result_row(si2, "FS rolamento",self._v_FS_r, cor=FG)
-        self._lbl_FS_r_sem.pack(fill="x")
-
-        # ══════════════════════════════════════════════════════════════════════
-        # SECAO 5 — GRAFICO (largura total)
-        # ══════════════════════════════════════════════════════════════════════
+        # ── Grafico ───────────────────────────────────────────────────────────
         tk.Frame(W, bg=BORDER, height=1).pack(fill="x", padx=20, pady=(10,4))
-        graf_frame2 = tk.Frame(W, bg=BG)
-        graf_frame2.pack(fill="x", padx=20, pady=(0,20))
-
+        graf_frame = tk.Frame(W, bg=BG)
+        graf_frame.pack(fill="x", padx=20, pady=(0,4))
         self._fig2, self._ax_interf = plt.subplots(1, 1, figsize=(13, 4.5), facecolor=BG)
         self._fig2.tight_layout(pad=2.5)
         self._ax_interf.set_facecolor(BG3)
         for sp in self._ax_interf.spines.values(): sp.set_edgecolor(BORDER)
         self._ax_interf.tick_params(colors=FG_DIM, labelsize=8)
-        self._canvas_interf = FigureCanvasTkAgg(self._fig2, master=graf_frame2)
+        self._canvas_interf = FigureCanvasTkAgg(self._fig2, master=graf_frame)
         self._canvas_interf.get_tk_widget().pack(fill="x")
         self._placeholder_interf()
 
-        # Aplica presets iniciais
-        self._on_mat_manga()
-        self._on_mat_rol()
-        self._on_cond_change()
+        # ── Botao PDF ─────────────────────────────────────────────────────────
+        pdf_frame = tk.Frame(W, bg=BG)
+        pdf_frame.pack(fill="x", padx=20, pady=(0,20))
+        self._btn_pdf2 = tk.Button(pdf_frame, text="Exportar PDF",
+            command=self._exportar_pdf, bg=BG2, fg=GOLD,
+            font=("Courier",10,"bold"), relief="flat", pady=8, cursor="hand2",
+            activebackground=BG, activeforeground=GOLD, state="disabled")
+        self._btn_pdf2.pack(fill="x")
 
-    # ── Callbacks ─────────────────────────────────────────────────────────────
+    # ── Helper ───────────────────────────────────────────────────────────────
 
-    def _on_mat_manga(self, event=None):
-        m = MATERIAIS[self._mat_manga_var.get()]
-        self._E_m.set(str(m["E"])); self._nu_m.set(str(m["nu"])); self._Sy_m.set(str(m["Sy"]))
-        self._on_cond_change()
+    def _v(self, sv):
+        return float(sv.get().replace(",", "."))
 
-    def _on_mat_rol(self, event=None):
-        m = MATERIAIS[self._mat_rol_var.get()]
-        self._E_r.set(str(m["E"])); self._nu_r.set(str(m["nu"])); self._Sy_r.set(str(m["Sy"]))
-        self._on_cond_change()
-
-    def _on_cond_change(self, event=None):
-        cond = self._cond_var.get()
-        nm = self._mat_manga_var.get(); nr = self._mat_rol_var.get()
-        mu = mu_auto(nm, nr, cond)
-        self._mu.set(f"{mu:.2f}")
-        c = "seco" if cond=="seco" else "com oleo"
-        self._lbl_mu_hint.config(
-            text=f"Sugerido ({c}): µ = {mu:.2f}  —  {nm.split()[0]} / {nr.split()[0]}")
-
-    def _preview_interferencia(self):
-        try:
-            sd=float(self._sede_d.get().replace(",",".")); ses=float(self._sede_es.get().replace(",","."))
-            sei=float(self._sede_ei.get().replace(",",".")); rD=float(self._rol_D.get().replace(",","."))
-            rES=float(self._rol_ES.get().replace(",",".")); rEI=float(self._rol_EI.get().replace(",","."))
-        except ValueError:
-            messagebox.showwarning("Atencao","Verifique os valores de tolerancia."); return
-
-        sm_max = sd+ses; sm_min = sd+sei   # furo manga: max e min
-        ro_max = rD+rES; ro_min = rD+rEI   # OD rolamento: max e min
-
-        self._lbl_sede_calc.config(text=f"Furo manga: {sm_min:.4f}  a  {sm_max:.4f} mm")
-        self._lbl_rol_calc.config( text=f"OD rolam.:  {ro_min:.4f}  a  {ro_max:.4f} mm")
-
-        # δ = OD_rolamento - furo_manga (positivo = interferencia)
-        d_max = (ro_max - sm_min) * 1000
-        d_min = (ro_min - sm_max) * 1000
-        d_nom = (d_max + d_min) / 2
-
-        self._v_dmax.set(f"{d_max:.1f} µm" if d_max>0 else f"{d_max:.1f} µm  ⚠ FOLGA!")
-        self._v_dmin.set(f"{d_min:.1f} µm" if d_min>0 else f"{d_min:.1f} µm  ⚠ FOLGA!")
-        self._v_dnom.set(f"{d_nom:.1f} µm")
-
-        if d_min <= 0:
-            self._lbl_delta_aviso.config(
-                text="ATENCAO: δ minima <= 0 — pode haver folga no pior caso!", fg=RED)
-        elif d_min < 20:
-            self._lbl_delta_aviso.config(
-                text="Aviso: δ minima pequena — verifique retencao axial.", fg=ORANGE)
-        else:
-            self._lbl_delta_aviso.config(
-                text=f"Interferencia confirmada em todos os casos.", fg=GREEN)
-
-        self._d_min_um = d_min; self._d_max_um = d_max; self._d_nom_um = d_nom
-
-    def _importar_ra(self):
-        ra = getattr(self._app, "ra_sede_cal", None)
-        if ra is None:
-            messagebox.showwarning("Atencao","Execute a analise na Aba 1 primeiro."); return
-        self._Ra_sede.set(f"{ra:.4f}")
-        self._lbl_import.config(text=f"Importado Aba 1: Ra = {ra:.4f} µm")
+    # ── Calculo ───────────────────────────────────────────────────────────────
 
     def _calcular(self):
-        self._preview_interferencia()
         try:
-            sd=float(self._sede_d.get().replace(",",".")); ses=float(self._sede_es.get().replace(",","."))
-            sei=float(self._sede_ei.get().replace(",",".")); rD=float(self._rol_D.get().replace(",","."))
-            rES=float(self._rol_ES.get().replace(",",".")); rEI=float(self._rol_EI.get().replace(",","."))
-
-            sm_max=sd+ses; sm_min=sd+sei; ro_max=rD+rES; ro_min=rD+rEI
-            d_max_um=(ro_max-sm_min)*1000; d_min_um=(ro_min-sm_max)*1000
-            d_nom_um=(d_max_um+d_min_um)/2
-
-            choice=self._delta_choice.get()
-            delta_used = {"minima":d_min_um,"maxima":d_max_um,"nominal":d_nom_um}[choice]
-            lbl_used   = {"minima":"δ minima","maxima":"δ maxima","nominal":"δ nominal"}[choice]
-
-            if delta_used <= 0:
-                messagebox.showerror("Erro",
-                    f"{lbl_used} = {delta_used:.1f} µm — folga, nao interferencia.\n"
-                    "Revise as tolerancias."); return
-
-            params = dict(
-                d=float(self._d.get().replace(",",".")),
-                L=float(self._L.get().replace(",",".")),
-                De=float(self._De.get().replace(",",".")),
-                di=float(self._di.get().replace(",",".")),
-                delta_nom=delta_used,
-                E_manga=float(self._E_m.get().replace(",",".")),
-                nu_manga=float(self._nu_m.get().replace(",",".")),
-                Sy_manga=float(self._Sy_m.get().replace(",",".")),
-                E_rol=float(self._E_r.get().replace(",",".")),
-                nu_rol=float(self._nu_r.get().replace(",",".")),
-                Sy_rol=float(self._Sy_r.get().replace(",",".")),
-                Ra_sede=float(self._Ra_sede.get().replace(",",".")),
-                Ra_rol=float(self._Ra_rol.get().replace(",",".")),
-                k_rz=float(self._k_rz.get().replace(",",".")),
-                mu=float(self._mu.get().replace(",",".")),
-            )
+            Ei  = self._v(self._Ei);   vi  = self._v(self._vi)
+            di  = self._v(self._di);   d   = self._v(self._d)
+            sh_up = self._v(self._tol_sh_up); sh_lo = self._v(self._tol_sh_lo)
+            Eo  = self._v(self._Eo);   vo  = self._v(self._vo)
+            do_ = self._v(self._do);   dh  = self._v(self._dh)
+            ho_up = self._v(self._tol_ho_up); ho_lo = self._v(self._tol_ho_lo)
+            w_nom = self._v(self._w_nom)
+            w_lo  = self._v(self._w_lo)
+            w_up  = self._v(self._w_up)
+            mu_dry   = self._v(self._mu_dry)
+            mu_lubed = self._v(self._mu_lubed)
         except ValueError:
-            messagebox.showerror("Erro","Verifique os valores. Use ponto como decimal."); return
+            messagebox.showerror("Erro", "Verifique os valores. Use ponto como decimal."); return
 
-        if params["De"]<=params["d"]:
-            messagebox.showerror("Erro","De deve ser maior que d."); return
-        if params["di"]>0 and params["di"]>=params["d"]:
-            messagebox.showerror("Erro","di deve ser menor que d."); return
+        if do_ <= d:
+            messagebox.showerror("Erro", "Diam. externo do cubo (do) deve ser maior que d."); return
+        if di >= d:
+            messagebox.showerror("Erro", "Diam. interno do eixo (di) deve ser menor que d."); return
 
-        try:
-            res = calcular_interferencia(params)
-        except ValueError as e:
-            messagebox.showerror("Interferencia insuficiente",str(e)); return
-        except Exception as e:
-            messagebox.showerror("Erro no calculo",str(e)); return
+        sh_max = d  + sh_up;  sh_min = d  + sh_lo
+        ho_max = dh + ho_up;  ho_min = dh + ho_lo
+        delta_max = (sh_max - ho_min) / 2
+        delta_min = (sh_min - ho_max) / 2
 
-        self._resultado=res; self._params=params
-        self._delta_lbl=lbl_used; self._d_min_um=d_min_um
-        self._d_max_um=d_max_um;  self._d_nom_um=d_nom_um
-        self._cond_used=self._cond_var.get()
-        self._mat_manga=self._mat_manga_var.get()
-        self._mat_rol=self._mat_rol_var.get()
+        if delta_max <= 0:
+            messagebox.showerror("Erro", "dmax <= 0 -- sem interferencia no pior caso."); return
 
-        cond_str = "Seco" if self._cond_used=="seco" else "Com oleo/graxa"
-        self._lbl_delta_usado.config(
-            text=f"  {lbl_used} = {delta_used:.1f} µm  |  {cond_str}  |  µ = {params['mu']:.2f}",
+        self._lbl_shaft.config(text=f"Eixo: {sh_min:.4f}  a  {sh_max:.4f} mm")
+        self._lbl_hub.config(  text=f"Furo: {ho_min:.4f}  a  {ho_max:.4f} mm")
+
+        R  = d   / (2 * 1000)
+        ri = di  / (2 * 1000)
+        ro = do_ / (2 * 1000)
+
+        pmax = lame_pressure(delta_max, R, Eo, ro, vo, Ei, ri, vi)
+        pmin = lame_pressure(delta_min, R, Eo, ro, vo, Ei, ri, vi) if delta_min > 0 else 0.0
+
+        A_nom = math.pi * d * w_nom
+        A_lo  = math.pi * d * w_lo
+        A_up  = math.pi * d * w_up
+
+        F_nom_dry_N,  F_nom_dry_kgf  = engagement_force(pmax, A_nom, mu_dry)
+        F_nom_lub_N,  F_nom_lub_kgf  = engagement_force(pmax, A_nom, mu_lubed)
+        F_lo_dry_N,   F_lo_dry_kgf   = engagement_force(pmax, A_lo,  mu_dry)
+        F_lo_lub_N,   F_lo_lub_kgf   = engagement_force(pmax, A_lo,  mu_lubed)
+        F_up_dry_N,   F_up_dry_kgf   = engagement_force(pmax, A_up,  mu_dry)
+        F_up_lub_N,   F_up_lub_kgf   = engagement_force(pmax, A_up,  mu_lubed)
+        avg_N   = (F_nom_dry_N + F_nom_lub_N) / 2
+        avg_kgf = avg_N / 9.81
+
+        self._resultado = dict(
+            d=d, di=di, do_=do_, dh=dh, Ei=Ei, vi=vi, Eo=Eo, vo=vo,
+            sh_max=sh_max, sh_min=sh_min, ho_max=ho_max, ho_min=ho_min,
+            delta_max=delta_max, delta_min=delta_min,
+            pmax=pmax, pmin=pmin,
+            A_nom=A_nom, A_lo=A_lo, A_up=A_up,
+            w_nom=w_nom, w_lo=w_lo, w_up=w_up,
+            mu_dry=mu_dry, mu_lubed=mu_lubed,
+            F_nom_dry_N=F_nom_dry_N, F_nom_dry_kgf=F_nom_dry_kgf,
+            F_nom_lub_N=F_nom_lub_N, F_nom_lub_kgf=F_nom_lub_kgf,
+            F_lo_dry_N=F_lo_dry_N,   F_lo_dry_kgf=F_lo_dry_kgf,
+            F_lo_lub_N=F_lo_lub_N,   F_lo_lub_kgf=F_lo_lub_kgf,
+            F_up_dry_N=F_up_dry_N,   F_up_dry_kgf=F_up_dry_kgf,
+            F_up_lub_N=F_up_lub_N,   F_up_lub_kgf=F_up_lub_kgf,
+            avg_N=avg_N, avg_kgf=avg_kgf,
+        )
+        self._lbl_status.config(
+            text=f"  dmax={delta_max:.4f} mm  pmax={pmax:.2f} MPa  F_nom_seco={F_nom_dry_N:.0f} N",
             fg=GREEN)
-        self._mostrar_resultado(res)
+        self._mostrar_resultado(self._resultado)
         self._btn_pdf2.config(state="normal")
 
     def _mostrar_resultado(self, r):
-        self._v_delta_nom2.set(f"{r['delta_nom']:.1f} µm")
-        self._v_rz_sede.set(   f"{r['Rz_sede']:.2f} µm")
-        self._v_rz_rol.set(    f"{r['Rz_rol']:.2f} µm")
-        self._v_delta_ef.set(  f"{r['delta_ef']:.2f} µm  ({r['delta_ef']/r['delta_nom']*100:.1f}%)")
-        self._v_pressao.set(   f"{r['pressao']:.2f}")
-        self._v_F_kN.set(      f"{r['F_kN']:.3f}")
-        self._v_F_N.set(       f"{r['F_N']:.0f}")
-        self._v_st_m.set(      f"{r['s_t_m']:.1f}  (trac.)")
-        self._v_vm_m.set(      f"{r['s_VM_m']:.1f}")
-        self._v_st_r.set(      f"{r['s_t_r']:.1f}  (comp.)" if r['s_t_r']<0 else f"{r['s_t_r']:.1f}")
-        self._v_vm_r.set(      f"{r['s_VM_r']:.1f}")
-        for fs,lv,ls in [(r["FS_m"],self._v_FS_m,self._lbl_FS_m_sem),
-                          (r["FS_r"],self._v_FS_r,self._lbl_FS_r_sem)]:
-            lv.set(f"{fs:.2f}")
-            if fs>=2.0:   c,t=GREEN,  "  OK (FS >= 2.0)"
-            elif fs>=1.2: c,t=ORANGE, "  ATENCAO (1.2 <= FS < 2.0)"
-            else:         c,t=RED,    "  RISCO (FS < 1.2)"
-            ls.config(text=t, fg=c)
-        self._plotar_interferencia(self._params, r)
+        self._v_sh_max.set(f"{r['sh_max']:.4f}")
+        self._v_sh_min.set(f"{r['sh_min']:.4f}")
+        self._v_ho_max.set(f"{r['ho_max']:.4f}")
+        self._v_ho_min.set(f"{r['ho_min']:.4f}")
+        self._v_dmax.set(f"{r['delta_max']:.4f}")
+        dm = r['delta_min']
+        self._v_dmin.set(f"{dm:.4f}" if dm > 0 else f"{dm:.4f}  FOLGA!")
+        self._v_pmax.set(f"{r['pmax']:.4f}")
+        self._v_pmin.set(f"{r['pmin']:.4f}" if r['pmin'] > 0 else "folga")
+        self._v_A_nom.set(f"{r['A_nom']:.2f}")
+        self._v_A_lo.set( f"{r['A_lo']:.2f}")
+        self._v_A_up.set( f"{r['A_up']:.2f}")
+        for key, vals in [
+            ("nominal", (r["F_nom_dry_N"], r["F_nom_dry_kgf"], r["F_nom_lub_N"], r["F_nom_lub_kgf"])),
+            ("lower",   (r["F_lo_dry_N"],  r["F_lo_dry_kgf"],  r["F_lo_lub_N"],  r["F_lo_lub_kgf"])),
+            ("upper",   (r["F_up_dry_N"],  r["F_up_dry_kgf"],  r["F_up_lub_N"],  r["F_up_lub_kgf"])),
+        ]:
+            for vk, val in zip(["dry_N","dry_kgf","lubed_N","lubed_kgf"], vals):
+                self._force_vars[(key, vk)].set(f"{val:.1f}")
+        self._v_avg_N.set(  f"{r['avg_N']:.1f} N")
+        self._v_avg_kgf.set(f"{r['avg_kgf']:.1f} kgf")
+        self._plotar(r)
 
-    def _plotar_interferencia(self, p, r):
-        ax=self._ax_interf; ax.clear(); ax.set_facecolor(BG3)
-        d=p["d"]; De=p["De"]; pressao=r["pressao"]
-        radii=np.linspace(d/2, De/2, 300)
-        sig=(pressao*(d/2)**2/((De/2)**2-(d/2)**2))*(1+(De/2)**2/radii**2)
-        ax.fill_between(radii,0,sig,alpha=0.2,color=ACCENT)
-        ax.plot(radii,sig,color=ACCENT,lw=2,label="Tensao hoop manga (tracao)")
-        ax.axhline(p["Sy_manga"],color=RED,   lw=1.2,ls="--",alpha=0.9,
-                   label=f"Sy manga = {p['Sy_manga']:.0f} MPa  (FS={r['FS_m']:.2f})")
-        ax.axvline(d/2,          color=GOLD,  lw=1.0,ls=":",alpha=0.8,
-                   label=f"r_int = {d/2:.2f} mm")
-        ax.axvline(De/2,         color=FG_DIM,lw=1.0,ls=":",alpha=0.8,
-                   label=f"r_ext = {De/2:.2f} mm")
-        ax.axhline(pressao,      color=PURPLE,lw=1.2,ls="--",alpha=0.9,
-                   label=f"p = {pressao:.2f} MPa")
-        cond="seco" if self._cond_used=="seco" else "com oleo"
+    def _plotar(self, r):
+        ax = self._ax_interf; ax.clear(); ax.set_facecolor(BG3)
+        casos = ["Nominal", "Lower", "Upper"]
+        dry   = [r["F_nom_dry_N"]/1000, r["F_lo_dry_N"]/1000, r["F_up_dry_N"]/1000]
+        lubed = [r["F_nom_lub_N"]/1000, r["F_lo_lub_N"]/1000, r["F_up_lub_N"]/1000]
+        x = np.arange(len(casos)); bw = 0.35
+        b1 = ax.bar(x - bw/2, dry,   bw, label=f"Seco   (mu={r['mu_dry']:.2f})",   color=ACCENT, alpha=0.85)
+        b2 = ax.bar(x + bw/2, lubed, bw, label=f"Lubric (mu={r['mu_lubed']:.2f})", color=GREEN,  alpha=0.85)
+        for bar in list(b1) + list(b2):
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+                    f"{bar.get_height():.2f}", ha="center", va="bottom", fontsize=7, color=FG_DIM)
+        ax.set_xticks(x); ax.set_xticklabels(casos, color=FG_DIM, fontsize=9)
+        ax.set_ylabel("Forca [kN]", color=FG_DIM, fontsize=8)
         ax.set_title(
-            f"Distribuicao tensao hoop — manga  |  "
-            f"δ={r['delta_nom']:.1f} µm  δef={r['delta_ef']:.1f} µm  "
-            f"p={pressao:.1f} MPa  F={r['F_kN']:.2f} kN  ({cond})",
+            f"Forca de encaixe/desencaixe  |  p = {r['pmax']:.2f} MPa  |  dmax = {r['delta_max']:.4f} mm",
             color=FG_DIM, fontsize=8, pad=6)
-        ax.set_xlabel("Raio [mm]",color=FG_DIM,fontsize=8)
-        ax.set_ylabel("Tensao hoop [MPa]",color=FG_DIM,fontsize=8)
-        ax.legend(fontsize=8,facecolor=BG2,edgecolor=BORDER,labelcolor=FG,loc="upper right")
+        ax.legend(fontsize=8, facecolor=BG2, edgecolor=BORDER, labelcolor=FG, loc="upper right")
         for sp in ax.spines.values(): sp.set_edgecolor(BORDER)
-        ax.tick_params(colors=FG_DIM,labelsize=8)
+        ax.tick_params(colors=FG_DIM, labelsize=8)
         self._fig2.tight_layout(pad=2.0); self._canvas_interf.draw()
 
     def _placeholder_interf(self):
-        ax=self._ax_interf; ax.clear(); ax.set_facecolor(BG3)
-        ax.text(0.5,0.5,
-            "sem dados\nPreencha os parametros acima e clique   ▶ CALCULAR INTERFERENCIA",
-            transform=ax.transAxes,ha="center",va="center",
-            color="#2a3a44",fontsize=9,multialignment="center")
+        ax = self._ax_interf; ax.clear(); ax.set_facecolor(BG3)
+        ax.text(0.5, 0.5,
+            "sem dados\nPreencha os parametros acima e clique   >>  CALCULAR INTERFERENCIA",
+            transform=ax.transAxes, ha="center", va="center",
+            color="#2a3a44", fontsize=9, multialignment="center")
         for sp in ax.spines.values(): sp.set_edgecolor(BORDER)
-        ax.tick_params(colors=FG_DIM,labelsize=8)
+        ax.tick_params(colors=FG_DIM, labelsize=8)
         self._canvas_interf.draw()
 
     def _exportar_pdf(self):
         if self._resultado is None:
-            messagebox.showwarning("Atencao","Realize o calculo antes de exportar."); return
-        path=filedialog.asksaveasfilename(title="Salvar relatorio PDF",
-            defaultextension=".pdf",filetypes=[("PDF","*.pdf")])
+            messagebox.showwarning("Atencao", "Realize o calculo antes de exportar."); return
+        path = filedialog.asksaveasfilename(title="Salvar relatorio PDF",
+            defaultextension=".pdf", filetypes=[("PDF", "*.pdf")])
         if not path: return
         try:
-            self._gerar_pdf_interferencia(path)
-            messagebox.showinfo("Sucesso",f"PDF salvo em:\n{path}")
+            self._gerar_pdf(path)
+            messagebox.showinfo("Sucesso", f"PDF salvo em:\n{path}")
         except Exception as e:
-            messagebox.showerror("Erro",str(e))
+            messagebox.showerror("Erro", str(e))
 
-    def _gerar_pdf_interferencia(self, path):
-        r=self._resultado; p=self._params
-        now=datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
-        cond_str="A seco" if self._cond_used=="seco" else "Com oleo/graxa"
-
-        fig_p,ax_p=plt.subplots(1,1,figsize=(7,3.5),facecolor="white")
-        radii=np.linspace(p["d"]/2,p["De"]/2,200)
-        sig=r["pressao"]*(p["d"]/2)**2/((p["De"]/2)**2-(p["d"]/2)**2)*(1+(p["De"]/2)**2/radii**2)
-        ax_p.fill_between(radii,0,sig,alpha=0.2,color="#0077aa")
-        ax_p.plot(radii,sig,color="#0077aa",lw=1.5,label="Hoop manga")
-        ax_p.axhline(p["Sy_manga"],color="red",lw=1,ls="--",label=f"Sy={p['Sy_manga']:.0f} MPa")
-        ax_p.axhline(r["pressao"],color="purple",lw=1,ls="--",label=f"p={r['pressao']:.1f} MPa")
-        ax_p.set_title("Distribuicao tensao hoop na manga",fontsize=9)
-        ax_p.set_xlabel("Raio [mm]",fontsize=8); ax_p.set_ylabel("Tensao [MPa]",fontsize=8)
+    def _gerar_pdf(self, path):
+        r = self._resultado
+        now = __import__("datetime").datetime.now().strftime("%d/%m/%Y %H:%M")
+        fig_p, ax_p = plt.subplots(1, 1, figsize=(7, 3.5), facecolor="white")
+        casos = ["Nominal", "Lower", "Upper"]
+        dry   = [r["F_nom_dry_N"]/1000, r["F_lo_dry_N"]/1000, r["F_up_dry_N"]/1000]
+        lubed = [r["F_nom_lub_N"]/1000, r["F_lo_lub_N"]/1000, r["F_up_lub_N"]/1000]
+        x = __import__("numpy").arange(len(casos)); bw = 0.35
+        ax_p.bar(x - bw/2, dry,   bw, label=f"Seco (mu={r['mu_dry']:.2f})",   color="#0077aa", alpha=0.85)
+        ax_p.bar(x + bw/2, lubed, bw, label=f"Lubr (mu={r['mu_lubed']:.2f})", color="#22aa55", alpha=0.85)
+        ax_p.set_xticks(x); ax_p.set_xticklabels(casos, fontsize=8)
+        ax_p.set_ylabel("Forca [kN]", fontsize=8)
+        ax_p.set_title("Forca de encaixe/desencaixe por caso de largura", fontsize=9)
         ax_p.legend(fontsize=7); ax_p.tick_params(labelsize=7)
-        buf=io.BytesIO()
-        fig_p.savefig(buf,format="png",dpi=150,bbox_inches="tight",facecolor="white")
+        buf = __import__("io").BytesIO()
+        fig_p.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="white")
         buf.seek(0); plt.close(fig_p)
 
-        doc=SimpleDocTemplate(path,pagesize=A4,leftMargin=20*mm,rightMargin=20*mm,
-                              topMargin=18*mm,bottomMargin=18*mm)
-        W=A4[0]-40*mm
-        s_t =ParagraphStyle("t",fontSize=14,fontName="Helvetica-Bold",textColor=colors.HexColor("#003366"),spaceAfter=2)
-        s_a =ParagraphStyle("a",fontSize=9, fontName="Helvetica-Bold",textColor=colors.HexColor("#003366"),spaceAfter=1)
-        s_n =ParagraphStyle("n",fontSize=7.5,fontName="Helvetica-Oblique",textColor=colors.HexColor("#666666"),spaceAfter=4)
-        s_s =ParagraphStyle("s",fontSize=10,fontName="Helvetica-Bold",textColor=colors.HexColor("#003366"),spaceBefore=10,spaceAfter=4)
-        s_b =ParagraphStyle("b",fontSize=8.5,fontName="Helvetica",textColor=colors.black,spaceAfter=3)
-        s_w =ParagraphStyle("w",fontSize=7.5,fontName="Helvetica-Oblique",textColor=colors.HexColor("#7a5000"),
-                             backColor=colors.HexColor("#fff8e1"),spaceAfter=4,leftIndent=6,rightIndent=6)
-        def tbl(data,cw):
-            t=Table(data,colWidths=cw)
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        from reportlab.lib import colors
+        from reportlab.lib.styles import ParagraphStyle
+        from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
+                                        Table, TableStyle, Image as RLImage, HRFlowable)
+        from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+
+        doc = SimpleDocTemplate(path, pagesize=A4,
+                                leftMargin=20*mm, rightMargin=20*mm,
+                                topMargin=18*mm, bottomMargin=18*mm)
+        PW = A4[0] - 40*mm
+        s_t = ParagraphStyle("t", fontSize=14, fontName="Helvetica-Bold",
+                              textColor=colors.HexColor("#003366"), spaceAfter=2)
+        s_a = ParagraphStyle("a", fontSize=9,  fontName="Helvetica-Bold",
+                              textColor=colors.HexColor("#003366"), spaceAfter=1)
+        s_n = ParagraphStyle("n", fontSize=7.5, fontName="Helvetica-Oblique",
+                              textColor=colors.HexColor("#666666"), spaceAfter=4)
+        s_s = ParagraphStyle("s", fontSize=10, fontName="Helvetica-Bold",
+                              textColor=colors.HexColor("#003366"), spaceBefore=10, spaceAfter=4)
+        s_w = ParagraphStyle("w", fontSize=7.5, fontName="Helvetica-Oblique",
+                              textColor=colors.HexColor("#7a5000"),
+                              backColor=colors.HexColor("#fff8e1"),
+                              spaceAfter=4, leftIndent=6, rightIndent=6)
+        def tbl(data, cw):
+            t = Table(data, colWidths=cw)
             t.setStyle(TableStyle([
                 ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#003366")),
                 ("TEXTCOLOR",(0,0),(-1,0),colors.white),
@@ -1310,90 +1106,75 @@ class AbaInterferencia(tk.Frame):
             ]))
             return t
 
-        story=[]
-        ht=Table([[Paragraph("RELATORIO — CALCULO DE INTERFERENCIA",s_t),
-                   Paragraph(f"Gerado em: {now}",
-                   ParagraphStyle("rt",fontSize=8,fontName="Helvetica",
-                   textColor=colors.HexColor("#555555"),alignment=TA_RIGHT))]],
-                 colWidths=[W*0.65,W*0.35])
-        ht.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"MIDDLE"),("BOTTOMPADDING",(0,0),(-1,-1),4)]))
+        story = []
+        ht = Table([[Paragraph("RELATORIO - KNUCKLE INTERFERENCE CALCULATOR", s_t),
+                     Paragraph(f"Gerado em: {now}",
+                     ParagraphStyle("rt", fontSize=8, fontName="Helvetica",
+                     textColor=colors.HexColor("#555555"), alignment=TA_RIGHT))]],
+                   colWidths=[PW*0.65, PW*0.35])
+        ht.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+                                 ("BOTTOMPADDING",(0,0),(-1,-1),4)]))
         story.append(ht)
-        story.append(Paragraph("Author: Bruno Bernardinetti - Stellantis",s_a))
-        story.append(HRFlowable(width="100%",thickness=2,color=colors.HexColor("#003366"),spaceAfter=4))
+        story.append(Paragraph("Author: Bruno Bernardinetti - Stellantis", s_a))
+        story.append(HRFlowable(width="100%", thickness=2,
+                                color=colors.HexColor("#003366"), spaceAfter=4))
         story.append(Paragraph(
-            "Metodo: Equacoes de Lame — ajuste com interferencia. "
-            "Interferencia efetiva descontando alisamento de asperezas (VDI 2230). "
-            "Configuracao: OD do anel externo do rolamento prensado no furo da manga.",s_n))
-
-        story.append(Paragraph("Tolerancias e Interferencia",s_s))
+            "Metodo: Equacoes de Lame para cilindros de parede grossa. "
+            "Interferencia radial. Forcas calculadas para duas condicoes de atrito "
+            "(seco e lubrificado) e tres larguras (nominal, lower, upper).", s_n))
+        story.append(Paragraph("Parametros de Entrada", s_s))
         story.append(tbl([
-            ["Grandeza","Furo manga (externa)","OD rolamento (interna)","Unidade"],
-            ["Diam. nominal",
-             f"{float(self._sede_d.get()):.3f} (furo)",
-             f"{float(self._rol_D.get()):.3f} (OD)","mm"],
-            ["Desvio superior", self._sede_es.get(), self._rol_ES.get(),"mm"],
-            ["Desvio inferior", self._sede_ei.get(), self._rol_EI.get(),"mm"],
-            ["Diam. maximo",
-             f"{float(self._sede_d.get())+float(self._sede_es.get()):.4f}",
-             f"{float(self._rol_D.get())+float(self._rol_ES.get()):.4f}","mm"],
-            ["Diam. minimo",
-             f"{float(self._sede_d.get())+float(self._sede_ei.get()):.4f}",
-             f"{float(self._rol_D.get())+float(self._rol_EI.get()):.4f}","mm"],
-            ["delta minima",  f"{self._d_min_um:.1f}","—","µm"],
-            ["delta nominal", f"{self._d_nom_um:.1f}","—","µm"],
-            ["delta maxima",  f"{self._d_max_um:.1f}","—","µm"],
-            ["delta USADA",   f"{p['delta_nom']:.1f}  ({self._delta_lbl})","—","µm"],
-        ],[W*0.35,W*0.22,W*0.22,W*0.21]))
-
-        story.append(Paragraph("Parametros de Calculo",s_s))
+            ["Parametro", "Eixo (Shaft)", "Cubo (Hub)", "Unidade"],
+            ["Young E",         f"{r['Ei']:.2f}",   f"{r['Eo']:.2f}",   "GPa"],
+            ["Poisson nu",      f"{r['vi']:.3f}",   f"{r['vo']:.3f}",   "---"],
+            ["Diam. nominal",   f"{r['d']:.3f}",    f"{r['dh']:.3f}",   "mm"],
+            ["Diam. ext./int.", f"{r['di']:.3f} (int.)", f"{r['do_']:.3f} (ext.)", "mm"],
+            ["Diam. maximo",    f"{r['sh_max']:.4f}", f"{r['ho_max']:.4f}", "mm"],
+            ["Diam. minimo",    f"{r['sh_min']:.4f}", f"{r['ho_min']:.4f}", "mm"],
+        ], [PW*0.35, PW*0.22, PW*0.22, PW*0.21]))
         story.append(tbl([
-            ["Parametro","Manga (furo)","Rolamento (OD)","Unidade"],
-            ["Material",         self._mat_manga,             self._mat_rol,          "—"],
-            ["Modulo E",         f"{p['E_manga']:.0f}",       f"{p['E_rol']:.0f}",    "MPa"],
-            ["Poisson nu",       f"{p['nu_manga']:.3f}",      f"{p['nu_rol']:.3f}",   "—"],
-            ["Tensao escoa. Sy", f"{p['Sy_manga']:.0f}",      f"{p['Sy_rol']:.0f}",   "MPa"],
-            ["Ra superficie",    f"{p['Ra_sede']:.3f}",       f"{p['Ra_rol']:.3f}",   "µm"],
-            ["Diam. ext. De",    f"{p['De']:.2f}",            "—",                    "mm"],
-            ["Diam. int. di",    "—",                         f"{p['di']:.2f}",       "mm"],
-            ["Comprimento L",    f"{p['L']:.1f}",             "—",                    "mm"],
-            ["Condicao",         cond_str,                    "—",                    "—"],
-            ["Coef. atrito µ",   f"{p['mu']:.3f}",            "—",                    "—"],
-            ["Fator k_Rz",       f"{p['k_rz']:.2f}",          "—",                    "—"],
-        ],[W*0.35,W*0.22,W*0.22,W*0.21]))
-
-        story.append(Paragraph("Resultados",s_s))
-        fm="OK" if r["FS_m"]>=2 else ("ATENCAO" if r["FS_m"]>=1.2 else "RISCO")
-        fr="OK" if r["FS_r"]>=2 else ("ATENCAO" if r["FS_r"]>=1.2 else "RISCO")
+            ["Larg. nominal [mm]","Larg. lower [mm]","Larg. upper [mm]","mu seco","mu lubr."],
+            [f"{r['w_nom']:.2f}", f"{r['w_lo']:.2f}", f"{r['w_up']:.2f}",
+             f"{r['mu_dry']:.2f}", f"{r['mu_lubed']:.2f}"],
+        ], [PW*0.22]*5))
+        story.append(Paragraph("Resultados", s_s))
+        pmin_str = f"{r['pmin']:.4f}" if r['pmin'] > 0 else "folga"
         story.append(tbl([
-            ["Grandeza","Valor","Unidade","Observacao"],
-            ["Rz furo manga (4xRa)",  f"{r['Rz_sede']:.2f}","µm","Estimado de Ra"],
-            ["Rz OD rolamento (4xRa)",f"{r['Rz_rol']:.2f}", "µm","Estimado de Ra"],
-            ["Interferencia efetiva", f"{r['delta_ef']:.2f}","µm",f"{r['delta_ef']/r['delta_nom']*100:.1f}% do nominal"],
-            ["Pressao de contato p",  f"{r['pressao']:.2f}", "MPa","Eq. de Lame"],
-            ["Forca mont./extrac.",   f"{r['F_kN']:.3f}",   "kN", f"= {r['F_N']:.0f} N  |  {cond_str}"],
-            ["Tensao hoop manga",     f"{r['s_t_m']:.1f}",  "MPa","Tracao, sup. interna"],
-            ["Von Mises manga",       f"{r['s_VM_m']:.1f}", "MPa",""],
-            ["Tensao hoop rolamento", f"{r['s_t_r']:.1f}",  "MPa","Compressao"],
-            ["Von Mises rolamento",   f"{r['s_VM_r']:.1f}", "MPa",""],
-            ["FS manga",              f"{r['FS_m']:.2f}",   "—",  fm],
-            ["FS rolamento",          f"{r['FS_r']:.2f}",   "—",  fr],
-        ],[W*0.35,W*0.15,W*0.15,W*0.35]))
-
-        story.append(Paragraph("Grafico — Distribuicao de Tensao Hoop na Manga",s_s))
-        story.append(RLImage(buf,width=W*0.85,height=W*0.85*3.5/7))
-        story.append(Spacer(1,4))
+            ["Grandeza", "Valor", "Unidade"],
+            ["Interferencia radial dmax", f"{r['delta_max']:.4f}", "mm"],
+            ["Interferencia radial dmin", f"{r['delta_min']:.4f}", "mm"],
+            ["Pressao pmax (Lame)",       f"{r['pmax']:.4f}",      "MPa"],
+            ["Pressao pmin (Lame)",       pmin_str,                 "MPa"],
+            ["Area A nominal",            f"{r['A_nom']:.2f}",     "mm2"],
+            ["Area A lower",              f"{r['A_lo']:.2f}",      "mm2"],
+            ["Area A upper",              f"{r['A_up']:.2f}",      "mm2"],
+        ], [PW*0.50, PW*0.30, PW*0.20]))
+        story.append(Paragraph("Forcas de Encaixe / Desencaixe", s_s))
+        story.append(tbl([
+            ["Caso", "Seco [N]", "Seco [kgf]", "Lubr [N]", "Lubr [kgf]"],
+            ["Nominal", f"{r['F_nom_dry_N']:.1f}", f"{r['F_nom_dry_kgf']:.1f}",
+                        f"{r['F_nom_lub_N']:.1f}", f"{r['F_nom_lub_kgf']:.1f}"],
+            ["Lower",   f"{r['F_lo_dry_N']:.1f}",  f"{r['F_lo_dry_kgf']:.1f}",
+                        f"{r['F_lo_lub_N']:.1f}",  f"{r['F_lo_lub_kgf']:.1f}"],
+            ["Upper",   f"{r['F_up_dry_N']:.1f}",  f"{r['F_up_dry_kgf']:.1f}",
+                        f"{r['F_up_lub_N']:.1f}",  f"{r['F_up_lub_kgf']:.1f}"],
+            ["Media nominal (dry+lubed)/2", f"{r['avg_N']:.1f}", f"{r['avg_kgf']:.1f}", "---","---"],
+        ], [PW*0.30, PW*0.175, PW*0.175, PW*0.175, PW*0.175]))
+        story.append(Paragraph("Grafico - Forca por Caso de Largura", s_s))
+        story.append(RLImage(buf, width=PW*0.85, height=PW*0.85*3.5/7))
+        story.append(Spacer(1, 4))
         story.append(Paragraph(
             "Aviso: Calculos baseados na teoria classica de Lame (elasticidade linear). "
             "Nao considera gradientes termicos, dinamica ou fadiga. "
-            "Validar com FEA para aplicacoes criticas.",s_w))
-        story.append(Spacer(1,8))
-        story.append(HRFlowable(width="100%",thickness=0.5,
-                                color=colors.HexColor("#cccccc"),spaceAfter=4))
+            "Validar com FEA para aplicacoes criticas.", s_w))
+        story.append(Spacer(1, 8))
+        story.append(HRFlowable(width="100%", thickness=0.5,
+                                color=colors.HexColor("#cccccc"), spaceAfter=4))
         story.append(Paragraph(
             f"Gerado pelo Estimador de Rugosidade + Interferencia  |  "
             f"Author: Bruno Bernardinetti - Stellantis  |  {now}",
-            ParagraphStyle("footer",fontSize=7,fontName="Helvetica",
-                           textColor=colors.HexColor("#888888"),alignment=TA_CENTER)))
+            ParagraphStyle("footer", fontSize=7, fontName="Helvetica",
+                           textColor=colors.HexColor("#888888"), alignment=TA_CENTER)))
         doc.build(story)
 
 # ─────────────────────────────────────────────────────────────────────────────
