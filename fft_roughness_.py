@@ -20,7 +20,7 @@ from PIL import Image, ImageTk
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from scipy.ndimage import sobel
 import os, io, datetime, math
 
@@ -799,6 +799,16 @@ class AbaInterferencia(tk.Frame):
         tk.Label(ai_f, text="Ref. Stellantis: seco=0.40  lubr.=0.21",
                  bg=BG, fg=FG_DIM, font=("Helvetica",7)).pack(fill="x", pady=(4,0))
 
+        ruf, rui_f = frame_card(col_c, "Rugosidade da superficie (Ra)")
+        ruf.pack(fill="x", pady=(0,6))
+        tk.Label(rui_f, text="Reducao de interferencia efetiva:",
+                 bg=BG, fg=FG_DIM, font=("Helvetica",7)).pack(anchor="w", pady=(0,4))
+        self._ra_eixo = entry_row(rui_f, "Ra eixo  [um]", "0.8", cor=GOLD)
+        self._ra_hub  = entry_row(rui_f, "Ra cubo  [um]", "6.3", cor=ACCENT)
+        tk.Label(rui_f,
+                 text=u"d_eff = d_nom − (Ra_eixo + Ra_cubo)×1e−3 mm",
+                 bg=BG, fg=FG_DIM, font=("Helvetica",7)).pack(fill="x", pady=(4,0))
+
         # ── Botao calcular ────────────────────────────────────────────────────
         btn_frame = tk.Frame(W, bg=BG)
         btn_frame.pack(fill="x", padx=20, pady=(4,4))
@@ -843,6 +853,12 @@ class AbaInterferencia(tk.Frame):
         self._v_dmax = tk.StringVar(value="---"); self._v_dmin = tk.StringVar(value="---")
         result_row(ii2, "dmax - pior caso   [mm]", self._v_dmax, cor=ORANGE)
         result_row(ii2, "dmin - melhor caso [mm]", self._v_dmin, cor=GREEN)
+        tk.Frame(ii2, bg=BORDER, height=1).pack(fill="x", pady=(4,2))
+        self._v_corr_rug = tk.StringVar(value="---")
+        result_row(ii2, "corr. rugos.       [mm]", self._v_corr_rug, cor=FG_DIM)
+        self._v_dmax_eff = tk.StringVar(value="---"); self._v_dmin_eff = tk.StringVar(value="---")
+        result_row(ii2, "dmax_eff (efetivo)  [mm]", self._v_dmax_eff, cor=ORANGE)
+        result_row(ii2, "dmin_eff (efetivo)  [mm]", self._v_dmin_eff, cor=GREEN)
 
         # Col 2: Pressoes + Areas
         pf, pi2 = frame_card(rc2, "Pressao de contato (Lame)")
@@ -944,24 +960,6 @@ class AbaInterferencia(tk.Frame):
                   relief="flat", padx=10, pady=3, cursor="hand2",
                   activebackground=BG, activeforeground=ACCENT).pack(side="left")
 
-        ins_ctrl2 = tk.Frame(W, bg=BG)
-        ins_ctrl2.pack(fill="x", padx=20, pady=(2,4))
-        tk.Label(ins_ctrl2, text="Pos. inicial [mm]:", bg=BG, fg=FG_DIM,
-                 font=("Courier",9)).pack(side="left")
-        self._v_ins_x0 = tk.StringVar(value="51")
-        tk.Entry(ins_ctrl2, textvariable=self._v_ins_x0, width=7,
-                 bg=BG2, fg=FG_DIM, insertbackground=FG,
-                 font=("Courier",10), relief="flat",
-                 highlightthickness=1, highlightbackground=BORDER,
-                 highlightcolor=ACCENT).pack(side="left", padx=(6,18))
-        tk.Label(ins_ctrl2, text="Aproximacao [mm]:", bg=BG, fg=FG_DIM,
-                 font=("Courier",9)).pack(side="left")
-        self._v_ins_apx = tk.StringVar(value="54")
-        tk.Entry(ins_ctrl2, textvariable=self._v_ins_apx, width=7,
-                 bg=BG2, fg=FG_DIM, insertbackground=FG,
-                 font=("Courier",10), relief="flat",
-                 highlightthickness=1, highlightbackground=BORDER,
-                 highlightcolor=ACCENT).pack(side="left", padx=(6,0))
 
         ins_frame = tk.Frame(W, bg=BG)
         ins_frame.pack(fill="x", padx=20, pady=(0,4))
@@ -1003,6 +1001,8 @@ class AbaInterferencia(tk.Frame):
             w_up  = self._v(self._w_up)
             mu_dry   = self._v(self._mu_dry)
             mu_lubed = self._v(self._mu_lubed)
+            ra_eixo  = self._v(self._ra_eixo)   # [um]
+            ra_hub   = self._v(self._ra_hub)     # [um]
         except ValueError:
             messagebox.showerror("Erro", "Verifique os valores. Use ponto como decimal."); return
 
@@ -1016,8 +1016,19 @@ class AbaInterferencia(tk.Frame):
         delta_max = (sh_max - ho_min) / 2
         delta_min = (sh_min - ho_max) / 2
 
-        if delta_max <= 0:
-            messagebox.showerror("Erro", "dmax <= 0 -- sem interferencia no pior caso."); return
+        # Correcao de rugosidade (DIN 7190): picos Ra de ambas as superficies se
+        # aplanam durante a montagem, reduzindo a interferencia efetiva.
+        # Converte Ra de um para mm (interferencia radial).
+        corr_rug = (ra_eixo + ra_hub) * 1e-3   # [mm]
+        delta_max_eff = delta_max - corr_rug
+        delta_min_eff = delta_min - corr_rug
+
+        if delta_max_eff <= 0:
+            messagebox.showerror(
+                "Erro",
+                f"Interferencia efetiva dmax = {delta_max_eff:.4f} mm <= 0\n"
+                f"(correcao de rugosidade = {corr_rug*1e3:.1f} um supera a interferencia nominal)."
+            ); return
 
         self._lbl_shaft.config(text=f"Eixo: {sh_min:.4f}  a  {sh_max:.4f} mm")
         self._lbl_hub.config(  text=f"Furo: {ho_min:.4f}  a  {ho_max:.4f} mm")
@@ -1026,8 +1037,8 @@ class AbaInterferencia(tk.Frame):
         ri = di  / (2 * 1000)
         ro = do_ / (2 * 1000)
 
-        pmax = lame_pressure(delta_max, R, Eo, ro, vo, Ei, ri, vi)
-        pmin = lame_pressure(delta_min, R, Eo, ro, vo, Ei, ri, vi) if delta_min > 0 else 0.0
+        pmax = lame_pressure(delta_max_eff, R, Eo, ro, vo, Ei, ri, vi)
+        pmin = lame_pressure(delta_min_eff, R, Eo, ro, vo, Ei, ri, vi) if delta_min_eff > 0 else 0.0
 
         A_nom = math.pi * d * w_nom
         A_lo  = math.pi * d * w_lo
@@ -1046,6 +1057,8 @@ class AbaInterferencia(tk.Frame):
             d=d, di=di, do_=do_, dh=dh, Ei=Ei, vi=vi, Eo=Eo, vo=vo,
             sh_max=sh_max, sh_min=sh_min, ho_max=ho_max, ho_min=ho_min,
             delta_max=delta_max, delta_min=delta_min,
+            ra_eixo=ra_eixo, ra_hub=ra_hub, corr_rug=corr_rug,
+            delta_max_eff=delta_max_eff, delta_min_eff=delta_min_eff,
             pmax=pmax, pmin=pmin,
             A_nom=A_nom, A_lo=A_lo, A_up=A_up,
             w_nom=w_nom, w_lo=w_lo, w_up=w_up,
@@ -1059,7 +1072,8 @@ class AbaInterferencia(tk.Frame):
             avg_N=avg_N, avg_kgf=avg_kgf,
         )
         self._lbl_status.config(
-            text=f"  dmax={delta_max:.4f} mm  pmax={pmax:.2f} MPa  F_nom_seco={F_nom_dry_N:.0f} N",
+            text=(f"  dmax_eff={delta_max_eff:.4f} mm  (nom={delta_max:.4f} - rug={corr_rug*1e3:.1f}um)"
+                  f"  pmax={pmax:.2f} MPa  F_nom_seco={F_nom_dry_N:.0f} N"),
             fg=GREEN)
         self._mostrar_resultado(self._resultado)
         self._btn_pdf2.config(state="normal")
@@ -1072,6 +1086,10 @@ class AbaInterferencia(tk.Frame):
         self._v_dmax.set(f"{r['delta_max']:.4f}")
         dm = r['delta_min']
         self._v_dmin.set(f"{dm:.4f}" if dm > 0 else f"{dm:.4f}  FOLGA!")
+        self._v_corr_rug.set(f"{r['corr_rug']*1e3:.2f} um  ({r['ra_eixo']:.2f}+{r['ra_hub']:.2f})")
+        self._v_dmax_eff.set(f"{r['delta_max_eff']:.4f}")
+        dme = r['delta_min_eff']
+        self._v_dmin_eff.set(f"{dme:.4f}" if dme > 0 else f"{dme:.4f}  FOLGA!")
         self._v_pmax.set(f"{r['pmax']:.4f}")
         self._v_pmin.set(f"{r['pmin']:.4f}" if r['pmin'] > 0 else "folga")
         self._v_A_nom.set(f"{r['A_nom']:.2f}")
@@ -1141,15 +1159,7 @@ class AbaInterferencia(tk.Frame):
             comp = [float(s.strip()) for s in self._v_ins_comp.get().split(",") if s.strip()]
         except ValueError:
             comp = []
-        try:
-            x0  = float(self._v_ins_x0.get().replace(",", "."))
-        except ValueError:
-            x0 = 0.0
-        try:
-            apx = float(self._v_ins_apx.get().replace(",", "."))
-        except ValueError:
-            apx = 0.0
-        self._plotar_insercao(self._resultado, v, comp, x0, apx)
+        self._plotar_insercao(self._resultado, v, comp, 0.0, 0.0)
 
     def _plotar_insercao(self, r, v_mm_s, comp_speeds=None, x0=0.0, apx=0.0):
         import matplotlib.transforms as mtransforms
@@ -1311,7 +1321,8 @@ class AbaInterferencia(tk.Frame):
                                 color=colors.HexColor("#003366"), spaceAfter=4))
         story.append(Paragraph(
             "Metodo: Equacoes de Lame para cilindros de parede grossa. "
-            "Interferencia radial. Forcas calculadas para duas condicoes de atrito "
+            "Interferencia radial com correcao de rugosidade (Ra_eixo + Ra_cubo). "
+            "Forcas calculadas para duas condicoes de atrito "
             "(seco e lubrificado) e tres larguras (nominal, lower, upper).", s_n))
         story.append(Paragraph("Parametros de Entrada", s_s))
         story.append(tbl([
@@ -1322,6 +1333,7 @@ class AbaInterferencia(tk.Frame):
             ["Diam. ext./int.", f"{r['di']:.3f} (int.)", f"{r['do_']:.3f} (ext.)", "mm"],
             ["Diam. maximo",    f"{r['sh_max']:.4f}", f"{r['ho_max']:.4f}", "mm"],
             ["Diam. minimo",    f"{r['sh_min']:.4f}", f"{r['ho_min']:.4f}", "mm"],
+            ["Rugosidade Ra",   f"{r['ra_eixo']:.2f}",  f"{r['ra_hub']:.2f}",  "um"],
         ], [PW*0.35, PW*0.22, PW*0.22, PW*0.21]))
         story.append(tbl([
             ["Larg. nominal [mm]","Larg. lower [mm]","Larg. upper [mm]","mu seco","mu lubr."],
@@ -1330,16 +1342,21 @@ class AbaInterferencia(tk.Frame):
         ], [PW*0.22]*5))
         story.append(Paragraph("Resultados", s_s))
         pmin_str = f"{r['pmin']:.4f}" if r['pmin'] > 0 else "folga"
+        dmin_eff_str = f"{r['delta_min_eff']:.4f}" if r['delta_min_eff'] > 0 else f"{r['delta_min_eff']:.4f}  FOLGA"
         story.append(tbl([
             ["Grandeza", "Valor", "Unidade"],
-            ["Interferencia radial dmax", f"{r['delta_max']:.4f}", "mm"],
-            ["Interferencia radial dmin", f"{r['delta_min']:.4f}", "mm"],
-            ["Pressao pmax (Lame)",       f"{r['pmax']:.4f}",      "MPa"],
-            ["Pressao pmin (Lame)",       pmin_str,                 "MPa"],
-            ["Area A nominal",            f"{r['A_nom']:.2f}",     "mm2"],
-            ["Area A lower",              f"{r['A_lo']:.2f}",      "mm2"],
-            ["Area A upper",              f"{r['A_up']:.2f}",      "mm2"],
-        ], [PW*0.50, PW*0.30, PW*0.20]))
+            ["Interferencia nominal dmax", f"{r['delta_max']:.4f}", "mm"],
+            ["Interferencia nominal dmin", f"{r['delta_min']:.4f}", "mm"],
+            [f"Correcao rugosidade (Ra_eixo={r['ra_eixo']:.2f} + Ra_cubo={r['ra_hub']:.2f})",
+             f"{r['corr_rug']*1e3:.2f}", "um"],
+            ["Interferencia efetiva dmax_eff", f"{r['delta_max_eff']:.4f}", "mm"],
+            ["Interferencia efetiva dmin_eff", dmin_eff_str,                 "mm"],
+            ["Pressao pmax (Lame, dmax_eff)", f"{r['pmax']:.4f}",           "MPa"],
+            ["Pressao pmin (Lame, dmin_eff)", pmin_str,                      "MPa"],
+            ["Area A nominal",               f"{r['A_nom']:.2f}",           "mm2"],
+            ["Area A lower",                 f"{r['A_lo']:.2f}",            "mm2"],
+            ["Area A upper",                 f"{r['A_up']:.2f}",            "mm2"],
+        ], [PW*0.55, PW*0.25, PW*0.20]))
         story.append(Paragraph("Forcas de Encaixe / Desencaixe", s_s))
         story.append(tbl([
             ["Caso", "Seco [N]", "Seco [kgf]", "Lubr [N]", "Lubr [kgf]"],
@@ -1428,6 +1445,394 @@ class AbaInterferencia(tk.Frame):
         doc.build(story)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Comparador de Curvas XML  (Force Curve Comparator — Knuckle Press-Fit)
+# ─────────────────────────────────────────────────────────────────────────────
+
+import xml.etree.ElementTree as ET
+import matplotlib.patches as mpatches
+
+_C_OK    = "#2ecc71"
+_C_NOK   = "#e74c3c"
+_C_PANEL = "#2a2a3e"
+_C_BTN   = "#313244"
+_C_SEL   = "#89b4fa"
+_C_DIM   = "#a6adc8"
+_OK_SH   = ["#2ecc71","#27ae60","#1abc9c","#52be80","#76d7a8","#a9dfbf"]
+_NOK_SH  = ["#e74c3c","#c0392b","#e67e22","#d35400","#f1948a","#f5b7b1"]
+
+
+def _xml_parse(filepath):
+    tree = ET.parse(filepath)
+    root = tree.getroot()
+    def gv(tag):
+        el = root.find(f".//{tag}")
+        return el.get("Value") if el is not None else ""
+    meta = {k: gv(t) for k, t in [
+        ("date","Date"),("time","Time"),("cycle","Cycle_number"),
+        ("program","Measuring_program_name"),
+        ("block_x","Block_X"),("block_y","Block_Y")]}
+    xs, ys = [], []
+    for pt in root.findall(".//Point"):
+        x_el = pt.find("X-ABSOLUTE-") or pt.find("X")
+        y_el = pt.find("Y")
+        if x_el is not None and y_el is not None:
+            try:
+                xs.append(float(x_el.get("Value").replace(",",".")))
+                ys.append(float(y_el.get("Value").replace(",",".")))
+            except (ValueError, AttributeError):
+                pass
+    if not xs:
+        raise ValueError(f"Nenhum ponto <Point> válido em {os.path.basename(filepath)}")
+    return {"x": xs, "y": ys, "meta": meta}
+
+
+def _xml_auto_classify(filepath):
+    name = os.path.basename(filepath).upper()
+    pos_ok  = name.rfind("_OK")
+    pos_nok = name.rfind("_NOK")
+    if pos_nok == -1 and pos_ok == -1:
+        pos_ok = name.rfind("OK"); pos_nok = name.rfind("NOK")
+    if pos_nok == -1 and pos_ok == -1: return "OK"
+    if pos_nok == -1: return "OK"
+    if pos_ok  == -1: return "NOK"
+    return "NOK" if pos_nok > pos_ok else "OK"
+
+
+class _CurveEntry:
+    def __init__(self, filepath, classification):
+        self.filepath       = filepath
+        self.label          = os.path.splitext(os.path.basename(filepath))[0]
+        self.classification = classification
+        self.data           = _xml_parse(filepath)
+    @property
+    def x(self):    return self.data["x"]
+    @property
+    def y(self):    return self.data["y"]
+    @property
+    def meta(self): return self.data["meta"]
+
+
+class AbaXMLComparator(tk.Frame):
+    def __init__(self, parent, **kw):
+        super().__init__(parent, bg=BG, **kw)
+        self.entries: list[_CurveEntry] = []
+        self._build()
+
+    # ── UI ───────────────────────────────────────────────────────────────────
+    def _build(self):
+        outer = tk.Frame(self, bg=BG)
+        outer.pack(fill="both", expand=True)
+
+        # ── Painel esquerdo ──────────────────────────────────────────────────
+        left = tk.Frame(outer, bg=_C_PANEL, width=300)
+        left.pack(side="left", fill="y", padx=(8,0), pady=8)
+        left.pack_propagate(False)
+
+        tk.Label(left, text="Force Curve Comparator",
+                 bg=_C_PANEL, fg=_C_SEL,
+                 font=("Segoe UI",11,"bold")).pack(pady=(12,2))
+        tk.Label(left, text="Knuckle Press-Fit  |  Stellantis",
+                 bg=_C_PANEL, fg=_C_DIM,
+                 font=("Segoe UI",8)).pack(pady=(0,8))
+
+        lf = tk.Frame(left, bg=_C_PANEL)
+        lf.pack(fill="both", expand=True, padx=6)
+        self._lb = tk.Listbox(lf, bg=_C_BTN, fg="#cdd6f4",
+                              selectbackground=_C_SEL, selectforeground="#000",
+                              font=("Consolas",8), relief="flat", bd=0,
+                              activestyle="none", exportselection=False)
+        self._lb.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(lf, orient="vertical", command=self._lb.yview)
+        sb.pack(side="right", fill="y")
+        self._lb.config(yscrollcommand=sb.set)
+        self._lb.bind("<<ListboxSelect>>", self._on_select)
+
+        self._detail = tk.StringVar(value="")
+        tk.Label(left, textvariable=self._detail, bg=_C_PANEL, fg=_C_DIM,
+                 font=("Consolas",8), justify="left",
+                 wraplength=280).pack(padx=8, pady=(4,0))
+
+        tk.Frame(left, bg="#45475a", height=1).pack(fill="x", padx=10, pady=6)
+
+        for text, cmd in [
+            ("➕  Adicionar XML(s)",    self._add_files),
+            ("🗑  Remover selecionado", self._remove_selected),
+            ("✏  Renomear label",       self._rename_label),
+        ]:
+            self._btn(left, text, cmd).pack(fill="x", padx=8, pady=2)
+
+        tk.Label(left, text="Classificação manual:",
+                 bg=_C_PANEL, fg=_C_DIM, font=("Segoe UI",8)).pack(pady=(6,0))
+        cf = tk.Frame(left, bg=_C_PANEL)
+        cf.pack(fill="x", padx=8, pady=2)
+        self._btn(cf,"✔  OK",  lambda: self._set_class("OK"),
+                  color="#1e4d2b", fg=_C_OK).pack(side="left",expand=True,fill="x",padx=(0,2))
+        self._btn(cf,"✘  NOK", lambda: self._set_class("NOK"),
+                  color="#4d1e1e", fg=_C_NOK).pack(side="left",expand=True,fill="x")
+
+        tk.Frame(left, bg="#45475a", height=1).pack(fill="x", padx=10, pady=6)
+
+        self._btn(left,"📊  Plotar / Atualizar",
+                  self._plot, color="#1e3a5f", fg=_C_SEL).pack(fill="x",padx=8,pady=2)
+        self._btn(left,"💾  Salvar gráfico",
+                  self._save_plot).pack(fill="x",padx=8,pady=2)
+        self._btn(left,"🗑  Limpar tudo",
+                  self._clear_all).pack(fill="x",padx=8,pady=2)
+
+        # Janela de aprovação
+        tk.Frame(left, bg="#45475a", height=1).pack(fill="x", padx=10, pady=6)
+        tk.Label(left, text="Janela de Aprovação",
+                 bg=_C_PANEL, fg=_C_SEL,
+                 font=("Segoe UI",9,"bold")).pack(pady=(0,4))
+        wg = tk.Frame(left, bg=_C_PANEL)
+        wg.pack(fill="x", padx=8)
+
+        def _we(row, col, label, default):
+            tk.Label(wg, text=label, bg=_C_PANEL, fg=_C_DIM,
+                     font=("Segoe UI",8), anchor="w").grid(
+                     row=row, column=col*2, sticky="w",
+                     padx=(6 if col else 0, 2), pady=2)
+            var = tk.StringVar(value=default)
+            tk.Entry(wg, textvariable=var, width=7, bg=_C_BTN, fg="#cdd6f4",
+                     insertbackground="#cdd6f4", relief="flat",
+                     highlightthickness=1, highlightbackground="#45475a",
+                     font=("Consolas",9)).grid(
+                     row=row, column=col*2+1, sticky="ew",
+                     padx=(0, 8 if col else 4), pady=2)
+            return var
+
+        self._wx0 = _we(0,0,"X min","115")
+        self._wx1 = _we(0,1,"X max","130")
+        self._wy0 = _we(1,0,"Y min","9.80")
+        self._wy1 = _we(1,1,"Y max","58.00")
+
+        self._btn(left,"↺  Aplicar Janela",
+                  self._plot, color="#1e3a5f", fg=_C_SEL).pack(fill="x",padx=8,pady=(6,2))
+
+        # Visualização
+        tk.Frame(left, bg="#45475a", height=1).pack(fill="x", padx=10, pady=6)
+        tk.Label(left, text="Visualização",
+                 bg=_C_PANEL, fg=_C_SEL,
+                 font=("Segoe UI",9,"bold")).pack(pady=(0,4))
+        vg = tk.Frame(left, bg=_C_PANEL)
+        vg.pack(fill="x", padx=8, pady=(0,4))
+        tk.Label(vg, text="Max curvas:", bg=_C_PANEL, fg=_C_DIM,
+                 font=("Segoe UI",8)).grid(row=0,column=0,sticky="w",pady=2)
+        self._max_var = tk.StringVar(value="Todas")
+        mc = ttk.Combobox(vg, textvariable=self._max_var, width=8,
+                          values=["Todas","1","2","3","5","10","20","50"],
+                          state="readonly", font=("Segoe UI",8))
+        mc.grid(row=0,column=1,sticky="w",padx=(6,0),pady=2)
+        mc.bind("<<ComboboxSelected>>", lambda _: self._plot())
+        self._legend_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(vg, text="Mostrar legenda", variable=self._legend_var,
+                       bg=_C_PANEL, fg=_C_DIM, selectcolor=_C_BTN,
+                       activebackground=_C_PANEL, activeforeground=_C_SEL,
+                       font=("Segoe UI",8),
+                       command=self._plot).grid(row=1,column=0,columnspan=2,sticky="w",pady=2)
+
+        self._status = tk.StringVar(value="Nenhum arquivo carregado.")
+        tk.Label(left, textvariable=self._status, bg=_C_PANEL, fg=_C_DIM,
+                 font=("Segoe UI",8), wraplength=280,
+                 justify="left").pack(pady=(6,10),padx=8)
+
+        # ── Painel direito — gráfico ─────────────────────────────────────────
+        right = tk.Frame(outer, bg=BG)
+        right.pack(side="left", fill="both", expand=True, padx=8, pady=8)
+
+        self._fig, self._axes = plt.subplots(1,2,figsize=(12,5.8),facecolor="#181825")
+        self._style_axes()
+        self._canvas = FigureCanvasTkAgg(self._fig, master=right)
+        self._canvas.get_tk_widget().pack(fill="both", expand=True)
+        tb_frame = tk.Frame(right, bg="#181825")
+        tb_frame.pack(fill="x")
+        NavigationToolbar2Tk(self._canvas, tb_frame).update()
+        self._canvas.draw()
+
+    # ── helpers ──────────────────────────────────────────────────────────────
+    def _btn(self, parent, text, cmd, color=_C_BTN, fg="#cdd6f4"):
+        return tk.Button(parent, text=text, command=cmd,
+                         bg=color, fg=fg,
+                         activebackground=_C_SEL, activeforeground="#000",
+                         relief="flat", bd=0, padx=8, pady=5,
+                         font=("Segoe UI",9), cursor="hand2")
+
+    def _style_axes(self):
+        for ax, (title, color) in zip(self._axes,[("OK",_C_OK),("NOK",_C_NOK)]):
+            ax.set_facecolor("#1e1e2e")
+            ax.tick_params(colors="#cdd6f4", labelsize=9)
+            for sp in ax.spines.values():
+                sp.set_color("#45475a"); sp.set_linewidth(0.8)
+            ax.grid(True,color="#313244",linewidth=0.6,linestyle="--",alpha=0.7)
+            ax.set_title(title,color=color,fontsize=13,fontweight="bold",pad=10)
+            ax.set_xlabel("Curso [mm]",color="#cdd6f4",fontsize=10)
+            ax.set_ylabel("Força [kN]",color="#cdd6f4",fontsize=10)
+
+    def _refresh_list(self):
+        self._lb.delete(0,"end")
+        for e in self.entries:
+            icon  = "✔" if e.classification == "OK" else "✘"
+            color = _C_OK if e.classification == "OK" else _C_NOK
+            self._lb.insert("end", f" {icon}  {e.label}")
+            self._lb.itemconfig("end", fg=color)
+        n_ok  = sum(1 for e in self.entries if e.classification=="OK")
+        n_nok = sum(1 for e in self.entries if e.classification=="NOK")
+        self._status.set(f"{len(self.entries)} arquivo(s) — {n_ok} OK / {n_nok} NOK")
+
+    # ── ações ─────────────────────────────────────────────────────────────────
+    def _add_files(self):
+        paths = filedialog.askopenfilenames(
+            title="Selecionar arquivos XML",
+            filetypes=[("XML files","*.xml"),("All files","*.*")])
+        added = 0
+        for path in paths:
+            if any(e.filepath == path for e in self.entries):
+                continue
+            try:
+                self.entries.append(_CurveEntry(path, _xml_auto_classify(path)))
+                added += 1
+            except Exception as err:
+                messagebox.showerror("Erro ao carregar",
+                                     f"{os.path.basename(path)}:\n{err}")
+        if added:
+            self._refresh_list(); self._plot()
+
+    def _remove_selected(self):
+        sel = self._lb.curselection()
+        if not sel: return
+        self.entries.pop(sel[0])
+        self._detail.set("")
+        self._refresh_list(); self._plot()
+
+    def _clear_all(self):
+        if not self.entries: return
+        if messagebox.askyesno("Limpar","Remover todos os arquivos?"):
+            self.entries.clear()
+            self._detail.set("")
+            self._refresh_list()
+            for ax in self._axes: ax.cla()
+            self._style_axes()
+            self._fig.tight_layout(pad=2.5)
+            self._canvas.draw()
+
+    def _rename_label(self):
+        sel = self._lb.curselection()
+        if not sel:
+            messagebox.showinfo("Renomear","Selecione um arquivo na lista primeiro.")
+            return
+        idx = sel[0]
+        win = tk.Toplevel(self)
+        win.title("Renomear"); win.configure(bg=_C_PANEL)
+        win.geometry("340x120"); win.resizable(False,False)
+        tk.Label(win,text="Novo label:",bg=_C_PANEL,fg="#cdd6f4",
+                 font=("Segoe UI",10)).pack(pady=(14,4))
+        ent = tk.Entry(win,font=("Segoe UI",10),bg=_C_BTN,
+                       fg="#cdd6f4",insertbackground="#cdd6f4",relief="flat")
+        ent.insert(0,self.entries[idx].label)
+        ent.pack(padx=20,fill="x"); ent.focus()
+        def apply(e=None):
+            v = ent.get().strip()
+            if v: self.entries[idx].label = v
+            self._refresh_list(); win.destroy()
+        ent.bind("<Return>",apply)
+        self._btn(win,"Confirmar",apply,color=_C_SEL,fg="#000").pack(pady=8)
+
+    def _set_class(self, cls):
+        sel = self._lb.curselection()
+        if not sel:
+            messagebox.showinfo("Classificar","Selecione um arquivo na lista primeiro.")
+            return
+        self.entries[sel[0]].classification = cls
+        self._refresh_list(); self._plot()
+
+    def _on_select(self, _=None):
+        sel = self._lb.curselection()
+        if not sel: return
+        e = self.entries[sel[0]]; m = e.meta
+        self._detail.set(
+            f"Classe   : {e.classification}\n"
+            f"Programa : {m.get('program','')}\n"
+            f"Data/Hora: {m.get('date','')} {m.get('time','')}\n"
+            f"Ciclo    : {m.get('cycle','')}\n"
+            f"Pontos   : {len(e.x)}\n"
+            f"Curso max: {max(e.x):.2f} mm\n"
+            f"Força max: {max(e.y):.3f} kN")
+
+    def _plot(self):
+        ok_list  = [e for e in self.entries if e.classification=="OK"]
+        nok_list = [e for e in self.entries if e.classification=="NOK"]
+        for ax in self._axes: ax.cla()
+        self._style_axes()
+
+        max_val = self._max_var.get()
+        max_n = None if max_val == "Todas" else int(max_val)
+        show_leg = self._legend_var.get()
+
+        def draw_group(ax, entries, shades, title, color):
+            n_total  = len(entries)
+            visible  = entries[:max_n] if max_n is not None else entries
+            hidden   = n_total - len(visible)
+            suffix   = f" (+{hidden} oculta{'s' if hidden!=1 else ''})" if hidden else ""
+            ax.set_title(f"{title}  ({n_total} curva{'s' if n_total!=1 else ''}){suffix}",
+                         color=color, fontsize=13, fontweight="bold", pad=10)
+            for i, e in enumerate(visible):
+                ax.plot(e.x, e.y, color=shades[i % len(shades)],
+                        linewidth=1.5, alpha=0.85, label=e.label)
+            if visible and show_leg:
+                ax.legend(loc="upper left", fontsize=8,
+                          facecolor="#2a2a3e", edgecolor="#45475a",
+                          labelcolor="#cdd6f4", framealpha=0.9)
+
+        draw_group(self._axes[0], ok_list,  _OK_SH,  "OK",  _C_OK)
+        draw_group(self._axes[1], nok_list, _NOK_SH, "NOK", _C_NOK)
+
+        import numpy as np
+        all_x = [x for e in self.entries for x in e.x]
+        if all_x:
+            ticks = np.arange(int(min(all_x)//5)*5,
+                              int(max(all_x)//5)*5+10, 5)
+            for ax in self._axes:
+                ax.set_xticks(ticks)
+                ax.tick_params(axis="x",labelsize=9,rotation=0)
+
+        try:
+            wx0=float(self._wx0.get()); wx1=float(self._wx1.get())
+            wy0=float(self._wy0.get()); wy1=float(self._wy1.get())
+            for ax in self._axes:
+                ax.add_patch(mpatches.Rectangle(
+                    (wx0,wy0),wx1-wx0,wy1-wy0,
+                    linewidth=1.8,edgecolor="#f1c40f",
+                    facecolor="#f1c40f",alpha=0.08,zorder=5))
+                ax.plot([wx0,wx1,wx1,wx0,wx0],[wy0,wy0,wy1,wy1,wy0],
+                        color="#f1c40f",linewidth=1.8,zorder=6)
+                ax.axhline(wy0,color="#f1c40f",lw=0.6,ls=":",alpha=0.5,zorder=4)
+                ax.axhline(wy1,color="#f1c40f",lw=0.6,ls=":",alpha=0.5,zorder=4)
+                ax.text(wx0-0.5,wy0,f"{wy0:.2f} kN",color="#f1c40f",
+                        fontsize=8,va="center",ha="right",zorder=7)
+                ax.text(wx0-0.5,wy1,f"{wy1:.2f} kN",color="#f1c40f",
+                        fontsize=8,va="center",ha="right",zorder=7)
+        except (ValueError,AttributeError):
+            pass
+
+        self._fig.tight_layout(pad=2.5)
+        self._canvas.draw()
+        self._status.set(f"{len(self.entries)} curva(s)  —  "
+                         f"{len(ok_list)} OK / {len(nok_list)} NOK")
+
+    def _save_plot(self):
+        if not self.entries:
+            messagebox.showinfo("Salvar","Nenhuma curva carregada."); return
+        path = filedialog.asksaveasfilename(
+            defaultextension=".png",
+            initialfile="force_curves_comparison.png",
+            filetypes=[("PNG","*.png"),("PDF","*.pdf"),("SVG","*.svg")])
+        if path:
+            self._fig.savefig(path,dpi=200,bbox_inches="tight",
+                              facecolor=self._fig.get_facecolor())
+            self._status.set(f"Salvo: {os.path.basename(path)}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # App principal com abas
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1446,7 +1851,7 @@ class App(tk.Tk):
         hdr.pack(fill="x")
         tk.Label(hdr,text="SURFACE ROUGHNESS  &  INTERFERENCE FIT ANALYZER",
                  font=("Courier",13,"bold"),fg=ACCENT,bg=BG).pack(anchor="w")
-        tk.Label(hdr,text="Author: Bruno Bernardinetti - Stellantis  |  Contagem/BH - Brasil",
+        tk.Label(hdr,text="Author: Bruno Bernardinetti - Stellantis  | Brasil",
                  font=("Helvetica",9),fg=FG_DIM,bg=BG).pack(anchor="w")
         tk.Frame(self,bg=ACCENT,height=2).pack(fill="x")
 
@@ -1466,6 +1871,9 @@ class App(tk.Tk):
 
         self._aba_int=AbaInterferencia(nb,app_ref=self)
         nb.add(self._aba_int,text="  Calculo de Interferencia  ")
+
+        self._aba_xml=AbaXMLComparator(nb)
+        nb.add(self._aba_xml,text="  Comparador de Curvas XML  ")
 
 
 if __name__ == "__main__":

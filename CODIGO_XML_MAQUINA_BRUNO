@@ -1,0 +1,713 @@
+"""
+Force Curve Comparator — Knuckle Press-Fit
+==========================================
+Author  : Bruno Bernardinetti — Stellantis
+Descrição:
+    Lê arquivos XML do formato Part_protocol (Promess/Kistler),
+    extrai a curva Força [kN] × Curso [mm], permite classificar
+    cada arquivo como OK ou NOK e exibe um comparativo lado a lado
+    em dois painéis gráficos independentes.
+
+Uso:
+    python force_curve_comparator.py               # abre a GUI vazia
+    python force_curve_comparator.py a.xml b.xml   # pré-carrega arquivos pela linha de comando
+
+Dependências:
+    pip install matplotlib
+    (tkinter já vem incluso no Python padrão)
+"""
+
+import sys
+import os
+import xml.etree.ElementTree as ET          # parser nativo do Python para XML
+import matplotlib.patches as mpatches       # usado para desenhar o retângulo da janela de aprovação
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import matplotlib
+matplotlib.use("TkAgg")                     # backend compatível com tkinter (evita conflito com outros backends)
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+
+
+# =============================================================================
+# PALETA DE CORES — tema escuro
+# =============================================================================
+
+COLOR_OK    = "#2ecc71"   # verde: curvas classificadas como OK
+COLOR_NOK   = "#e74c3c"   # vermelho: curvas classificadas como NOK
+COLOR_BG    = "#1e1e2e"   # fundo geral da janela
+COLOR_PANEL = "#2a2a3e"   # fundo do painel lateral esquerdo
+COLOR_TEXT  = "#cdd6f4"   # texto principal (branco-azulado)
+COLOR_BTN   = "#313244"   # fundo dos botões neutros
+COLOR_SEL   = "#89b4fa"   # azul claro para destaque / seleção
+
+# Paletas de shades para plotar múltiplas curvas no mesmo painel sem sobrepor cores
+OK_SHADES  = ["#2ecc71","#27ae60","#1abc9c","#52be80","#76d7a8","#a9dfbf"]
+NOK_SHADES = ["#e74c3c","#c0392b","#e67e22","#d35400","#f1948a","#f5b7b1"]
+
+
+# =============================================================================
+# PARSER — formato Part_protocol (Promess / Kistler)
+# =============================================================================
+
+def parse_xml(filepath):
+    """
+    Abre e interpreta um XML no formato Part_protocol gerado pela prensa Promess.
+    Extrai metadados (data, hora, ciclo, programa) e os pontos da curva Força × Curso.
+
+    Parâmetros:
+        filepath (str): caminho completo do arquivo XML.
+
+    Retorna:
+        dict com:
+            "x"    → lista de floats com posição do cursor [mm]
+            "y"    → lista de floats com força medida [kN]
+            "meta" → dicionário com campos de cabeçalho do arquivo
+
+    Lança ValueError se nenhum ponto <Point> válido for encontrado.
+    """
+    tree = ET.parse(filepath)       # carrega o arquivo XML inteiro na memória
+    root = tree.getroot()           # elemento raiz do documento XML
+
+    meta = {}
+
+    def gv(tag):
+        """Busca um elemento pelo nome de tag em qualquer nível e retorna o atributo 'Value'."""
+        el = root.find(f".//{tag}")
+        return el.get("Value") if el is not None else ""
+
+    # Extrai campos de cabeçalho que identificam o ensaio
+    meta["date"]    = gv("Date")                  # data do ensaio
+    meta["time"]    = gv("Time")                  # hora do ensaio
+    meta["cycle"]   = gv("Cycle_number")          # número do ciclo de prensagem
+    meta["program"] = gv("Measuring_program_name")# nome do programa de medição configurado na prensa
+    meta["block_x"] = gv("Block_X")               # bloco de parâmetros X (referência da máquina)
+    meta["block_y"] = gv("Block_Y")               # bloco de parâmetros Y (referência da máquina)
+
+    # --- Extração dos pontos da curva ---
+    xs, ys = [], []
+    for pt in root.findall(".//Point"):
+        # Tenta primeiro o tag com nome completo do eixo absoluto da máquina
+        x_el = pt.find("X-ABSOLUTE-")
+        if x_el is None:
+            # Fallback: alguns XMLs usam apenas <X> sem o sufixo "-ABSOLUTE-"
+            x_el = pt.find("X")
+        y_el = pt.find("Y")
+
+        # Só processa pontos onde ambos os valores existem e são conversíveis
+        if x_el is not None and y_el is not None:
+            try:
+                # Substitui vírgula por ponto para suportar localização PT-BR
+                x = float(x_el.get("Value").replace(",", "."))
+                y = float(y_el.get("Value").replace(",", "."))
+                xs.append(x)
+                ys.append(y)
+            except (ValueError, AttributeError):
+                # Ignora silenciosamente pontos malformados
+                pass
+
+    if not xs:
+        # Se nenhum ponto foi lido, o XML não é compatível — informa ao usuário
+        raise ValueError(
+            "Não foram encontrados pontos <Point> com X-ABSOLUTE- e Y no arquivo.\n"
+            f"Verifique a estrutura do XML: {os.path.basename(filepath)}"
+        )
+
+    # Os valores de X representam a coordenada absoluta da máquina (não normalizados para 0).
+    # Isso permite comparar curvas de ensaios diferentes sem deslocamentos artificiais.
+
+    return {"x": xs, "y": ys, "meta": meta}
+
+
+# =============================================================================
+# MODELO DE DADOS — uma curva carregada
+# =============================================================================
+
+class CurveEntry:
+    """
+    Encapsula todos os dados de uma curva de prensagem carregada de um arquivo XML.
+
+    Atributos:
+        filepath        : caminho completo do arquivo fonte
+        label           : nome de exibição (por padrão = nome do arquivo sem extensão)
+        classification  : "OK" ou "NOK" — pode ser definida pelo nome do arquivo ou manualmente
+        data            : dicionário retornado por parse_xml()
+    """
+    def __init__(self, filepath, classification):
+        self.filepath       = filepath
+        self.label          = os.path.splitext(os.path.basename(filepath))[0]  # nome sem .xml
+        self.classification = classification
+        self.data           = parse_xml(filepath)   # lê e valida o XML imediatamente
+
+    # Propriedades de conveniência para acessar os vetores sem passar pelo dicionário
+    @property
+    def x(self):    return self.data["x"]       # posições [mm]
+    @property
+    def y(self):    return self.data["y"]       # forças [kN]
+    @property
+    def meta(self): return self.data["meta"]    # metadados do cabeçalho XML
+
+
+def auto_classify(filepath):
+    """
+    Determina automaticamente se um arquivo é OK ou NOK com base EXCLUSIVAMENTE
+    no nome do arquivo — nunca nos dados medidos.
+
+    Regra de prioridade:
+        - Busca "_OK" e "_NOK" no nome (maiúsculo), sem case-sensitivity.
+        - Caso "_NOK" apareça DEPOIS de "_OK" no nome → NOK.
+        - Caso "_OK"  apareça DEPOIS de "_NOK" no nome → OK.
+        - Se nenhum dos dois for encontrado → padrão OK.
+
+    Exemplos:
+        Part__OK.xml      → OK
+        Part__NOK.xml     → NOK
+        Part__NOK_OK.xml  → OK  (o "_OK" aparece por último)
+    """
+    name = os.path.basename(filepath).upper()   # compara sempre em maiúsculas
+
+    # Usa rfind para encontrar a ÚLTIMA ocorrência de cada tag no nome
+    pos_ok  = name.rfind("_OK")
+    pos_nok = name.rfind("_NOK")
+
+    if pos_nok == -1 and pos_ok == -1:
+        # Fallback: tenta sem underscore (ex: "PARTE_MEDIDANOK.xml")
+        pos_ok  = name.rfind("OK")
+        pos_nok = name.rfind("NOK")
+
+    # Se nenhuma das duas strings existir, classifica como OK por padrão
+    if pos_nok == -1 and pos_ok == -1:
+        return "OK"
+    if pos_nok == -1:
+        return "OK"
+    if pos_ok == -1:
+        return "NOK"
+
+    # Quem aparecer mais à direita no nome vence (ex: "_NOK_OK" → OK ganha)
+    return "NOK" if pos_nok > pos_ok else "OK"
+
+
+# =============================================================================
+# JANELA PRINCIPAL
+# =============================================================================
+
+class App(tk.Tk):
+    """
+    Janela principal da aplicação.
+    Layout:
+        • Painel esquerdo (fixo 320 px) : lista de arquivos, botões de controle,
+          campos de janela de aprovação e barra de status.
+        • Painel direito (expande)       : dois subgráficos matplotlib (OK | NOK)
+          com barra de ferramentas nativa (zoom, pan, salvar).
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.title("Force Curve Comparator — Knuckle Press-Fit")
+        self.configure(bg=COLOR_BG)
+        self.geometry("1400x820")       # tamanho inicial confortável para duas telas de curvas
+        self.resizable(True, True)
+        self.entries: list[CurveEntry] = []  # lista de todas as curvas carregadas na sessão
+        self._build_ui()
+
+    # ------------------------------------------------------------------ UI
+    def _build_ui(self):
+        """Constrói todos os widgets da interface gráfica."""
+
+        # ── Painel lateral esquerdo ────────────────────────────────────────────
+        # Largura fixa em 320 px; pack_propagate(False) impede que os widgets
+        # internos alterem essa largura.
+        left = tk.Frame(self, bg=COLOR_PANEL, width=320)
+        left.pack(side="left", fill="y", padx=(8, 0), pady=8)
+        left.pack_propagate(False)
+
+        # Cabeçalho com título e subtítulo da aplicação
+        tk.Label(left, text="Force Curve Comparator",
+                 bg=COLOR_PANEL, fg=COLOR_SEL,
+                 font=("Segoe UI", 12, "bold")).pack(pady=(14, 2))
+        tk.Label(left, text="Knuckle Press-Fit  |  Stellantis",
+                 bg=COLOR_PANEL, fg="#a6adc8",
+                 font=("Segoe UI", 8)).pack(pady=(0, 10))
+
+        # ── Lista de arquivos carregados ───────────────────────────────────────
+        lf = tk.Frame(left, bg=COLOR_PANEL)
+        lf.pack(fill="both", expand=True, padx=6)   # expande verticalmente para preencher o painel
+
+        # Listbox mostra um item por curva com ícone ✔ (OK) ou ✘ (NOK) e cor correspondente
+        self.listbox = tk.Listbox(
+            lf, bg=COLOR_BTN, fg=COLOR_TEXT,
+            selectbackground=COLOR_SEL, selectforeground="#000",
+            font=("Consolas", 8), relief="flat", bd=0,
+            activestyle="none", exportselection=False   # mantém seleção ao clicar em outros widgets
+        )
+        self.listbox.pack(side="left", fill="both", expand=True)
+
+        # Scrollbar vertical acoplada à listbox
+        sb = ttk.Scrollbar(lf, orient="vertical", command=self.listbox.yview)
+        sb.pack(side="right", fill="y")
+        self.listbox.config(yscrollcommand=sb.set)
+
+        # Atualiza o painel de detalhes toda vez que o usuário muda a seleção
+        self.listbox.bind("<<ListboxSelect>>", self._on_select)
+
+        # ── Detalhes do arquivo selecionado ───────────────────────────────────
+        # Exibe metadados do XML (data, hora, ciclo, etc.) em texto simples
+        self.detail_var = tk.StringVar(value="")
+        tk.Label(left, textvariable=self.detail_var, bg=COLOR_PANEL,
+                 fg="#a6adc8", font=("Consolas", 8),
+                 justify="left", wraplength=300).pack(padx=8, pady=(4, 0))
+
+        # Separador visual horizontal
+        tk.Frame(left, bg="#45475a", height=1).pack(fill="x", padx=10, pady=8)
+
+        # ── Botões de gerenciamento de arquivos ────────────────────────────────
+        for text, cmd in [
+            ("➕  Adicionar XML(s)",    self._add_files),       # abre diálogo de seleção de arquivos
+            ("🗑  Remover selecionado", self._remove_selected),  # remove a curva selecionada na lista
+            ("✏  Renomear label",       self._rename_label),    # edita o nome de exibição da curva
+        ]:
+            self._btn(left, text, cmd).pack(fill="x", padx=8, pady=2)
+
+        # ── Classificação manual OK / NOK ──────────────────────────────────────
+        # Permite sobrescrever a classificação automática baseada no nome do arquivo
+        tk.Label(left, text="Classificação manual:",
+                 bg=COLOR_PANEL, fg="#a6adc8",
+                 font=("Segoe UI", 8)).pack(pady=(8, 0))
+        cf = tk.Frame(left, bg=COLOR_PANEL)
+        cf.pack(fill="x", padx=8, pady=2)
+        self._btn(cf, "✔  OK",  lambda: self._set_class("OK"),
+                  color="#1e4d2b", fg=COLOR_OK).pack(side="left", expand=True, fill="x", padx=(0, 2))
+        self._btn(cf, "✘  NOK", lambda: self._set_class("NOK"),
+                  color="#4d1e1e", fg=COLOR_NOK).pack(side="left", expand=True, fill="x")
+
+        tk.Frame(left, bg="#45475a", height=1).pack(fill="x", padx=10, pady=8)
+
+        # ── Botões de plotagem e exportação ───────────────────────────────────
+        self._btn(left, "📊  Plotar / Atualizar",
+                  self._plot, color="#1e3a5f", fg="#89b4fa").pack(fill="x", padx=8, pady=2)
+        self._btn(left, "💾  Salvar gráfico",
+                  self._save_plot).pack(fill="x", padx=8, pady=2)
+        self._btn(left, "🗑  Limpar tudo",
+                  self._clear_all).pack(fill="x", padx=8, pady=2)
+
+        # ── Janela de Aprovação (retângulo editável sobre o gráfico) ──────────
+        # Define a região [X_min, X_max] mm × [Y_min, Y_max] kN que representa
+        # a faixa de aprovação do processo de prensagem.
+        # O retângulo amarelo é redesenhado toda vez que o usuário clica "Plotar".
+        tk.Frame(left, bg="#45475a", height=1).pack(fill="x", padx=10, pady=8)
+        tk.Label(left, text="Janela de Aprovação",
+                 bg=COLOR_PANEL, fg="#89b4fa",
+                 font=("Segoe UI", 9, "bold")).pack(pady=(0, 4))
+
+        win_grid = tk.Frame(left, bg=COLOR_PANEL)
+        win_grid.pack(fill="x", padx=8)
+
+        def _win_entry(row, col, label, default):
+            """Cria um par Label + Entry no grid da janela de aprovação."""
+            tk.Label(win_grid, text=label, bg=COLOR_PANEL, fg="#a6adc8",
+                     font=("Segoe UI", 8), anchor="w").grid(row=row, column=col*2,
+                     sticky="w", padx=(6 if col else 0, 2), pady=2)
+            var = tk.StringVar(value=default)
+            e = tk.Entry(win_grid, textvariable=var, width=7,
+                         bg=COLOR_BTN, fg=COLOR_TEXT,
+                         insertbackground=COLOR_TEXT, relief="flat",
+                         highlightthickness=1, highlightbackground="#45475a",
+                         font=("Consolas", 9))
+            e.grid(row=row, column=col*2+1, sticky="ew", padx=(0, 8 if col else 4), pady=2)
+            return var
+
+        # Valores padrão baseados nos limites típicos do knuckle da Stellantis
+        self._win_xmin = _win_entry(0, 0, "X min", "115")   # início da janela em mm
+        self._win_xmax = _win_entry(0, 1, "X max", "130")   # fim da janela em mm
+        self._win_ymin = _win_entry(1, 0, "Y min", "9.80")  # força mínima aceitável [kN]
+        self._win_ymax = _win_entry(1, 1, "Y max", "58.00") # força máxima aceitável [kN]
+
+        # Botão que relê os campos e redesenha o gráfico com o novo retângulo
+        self._btn(left, "↺  Aplicar Janela",
+                  self._plot, color="#1e3a5f", fg="#89b4fa").pack(fill="x", padx=8, pady=(6, 2))
+
+        # ── Controles de visualização ─────────────────────────────────────────
+        tk.Frame(left, bg="#45475a", height=1).pack(fill="x", padx=10, pady=8)
+        tk.Label(left, text="Visualização",
+                 bg=COLOR_PANEL, fg="#89b4fa",
+                 font=("Segoe UI", 9, "bold")).pack(pady=(0, 4))
+
+        viz_grid = tk.Frame(left, bg=COLOR_PANEL)
+        viz_grid.pack(fill="x", padx=8, pady=(0, 4))
+
+        tk.Label(viz_grid, text="Max curvas:", bg=COLOR_PANEL, fg="#a6adc8",
+                 font=("Segoe UI", 8)).grid(row=0, column=0, sticky="w", pady=2)
+        self._max_curves_var = tk.StringVar(value="Todas")
+        max_cb = ttk.Combobox(viz_grid, textvariable=self._max_curves_var, width=8,
+                              values=["Todas", "1", "2", "3", "5", "10", "20", "50"],
+                              state="readonly", font=("Segoe UI", 8))
+        max_cb.grid(row=0, column=1, sticky="w", padx=(6, 0), pady=2)
+        max_cb.bind("<<ComboboxSelected>>", lambda _: self._plot())
+
+        self._legend_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(viz_grid, text="Mostrar legenda", variable=self._legend_var,
+                       bg=COLOR_PANEL, fg="#a6adc8", selectcolor=COLOR_BTN,
+                       activebackground=COLOR_PANEL, activeforeground=COLOR_SEL,
+                       font=("Segoe UI", 8),
+                       command=self._plot).grid(row=1, column=0, columnspan=2,
+                                                sticky="w", pady=2)
+
+        # ── Barra de status ────────────────────────────────────────────────────
+        # Exibe contagem de arquivos carregados e distribuição OK/NOK
+        self.status_var = tk.StringVar(value="Nenhum arquivo carregado.")
+        tk.Label(left, textvariable=self.status_var, bg=COLOR_PANEL,
+                 fg="#a6adc8", font=("Segoe UI", 8),
+                 wraplength=295, justify="left").pack(pady=(6, 10), padx=8)
+
+        # ── Painel direito — área do gráfico ──────────────────────────────────
+        right = tk.Frame(self, bg=COLOR_BG)
+        right.pack(side="left", fill="both", expand=True, padx=8, pady=8)
+
+        # Dois subgráficos lado a lado: esquerdo = OK, direito = NOK
+        self.fig, self.axes = plt.subplots(
+            1, 2, figsize=(12, 5.8), facecolor="#181825"
+        )
+        self._style_axes()
+
+        # Integra o canvas matplotlib dentro do frame tkinter
+        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+
+        # Barra de ferramentas nativa do matplotlib (zoom, pan, salvar PNG, etc.)
+        toolbar_frame = tk.Frame(right, bg="#181825")
+        toolbar_frame.pack(fill="x")
+        NavigationToolbar2Tk(self.canvas, toolbar_frame).update()
+
+        self.canvas.draw()   # renderização inicial (gráfico vazio)
+
+    # ------------------------------------------------------------------ helpers
+    def _btn(self, parent, text, cmd, color=COLOR_BTN, fg=COLOR_TEXT):
+        """
+        Cria e retorna um botão com estilo padronizado do tema escuro.
+        Centraliza a criação para manter consistência visual em toda a UI.
+        """
+        return tk.Button(
+            parent, text=text, command=cmd,
+            bg=color, fg=fg,
+            activebackground=COLOR_SEL, activeforeground="#000",
+            relief="flat", bd=0, padx=8, pady=5,
+            font=("Segoe UI", 9), cursor="hand2"
+        )
+
+    def _style_axes(self):
+        """
+        Aplica o estilo visual padrão (tema escuro, grid, rótulos de eixo)
+        nos dois subgráficos.
+        Deve ser chamada toda vez que os axes são limpos (ax.cla()),
+        pois cla() remove todas as propriedades de estilo.
+        """
+        for ax, (title, color) in zip(self.axes, [("OK", COLOR_OK), ("NOK", COLOR_NOK)]):
+            ax.set_facecolor("#1e1e2e")
+            ax.tick_params(colors="#cdd6f4", labelsize=9)
+            for sp in ax.spines.values():
+                sp.set_color("#45475a")
+                sp.set_linewidth(0.8)
+            ax.grid(True, color="#313244", linewidth=0.6, linestyle="--", alpha=0.7)
+            ax.set_title(title, color=color, fontsize=13, fontweight="bold", pad=10)
+            ax.set_xlabel("Curso [mm]", color="#cdd6f4", fontsize=10)
+            ax.set_ylabel("Força [kN]", color="#cdd6f4", fontsize=10)
+
+    # ------------------------------------------------------------------ ações
+    def _add_files(self):
+        """
+        Abre o diálogo de seleção de arquivos, carrega cada XML selecionado
+        e evita duplicatas (mesmo filepath já presente na lista).
+        Após carregamento bem-sucedido, atualiza lista e redesenha o gráfico.
+        """
+        paths = filedialog.askopenfilenames(
+            title="Selecionar arquivos XML",
+            filetypes=[("XML files", "*.xml"), ("All files", "*.*")]
+        )
+        added = 0
+        for path in paths:
+            # Verifica se o arquivo já foi carregado anteriormente nesta sessão
+            if any(e.filepath == path for e in self.entries):
+                continue
+            try:
+                entry = CurveEntry(path, auto_classify(path))
+                self.entries.append(entry)
+                added += 1
+            except Exception as err:
+                # Mostra erro por arquivo individualmente para não bloquear os demais
+                messagebox.showerror("Erro ao carregar",
+                                     f"{os.path.basename(path)}:\n{err}")
+        if added:
+            self._refresh_list()
+            self._plot()
+
+    def _remove_selected(self):
+        """
+        Remove a curva atualmente selecionada na listbox.
+        Atualiza a lista e redesenha o gráfico após a remoção.
+        """
+        sel = self.listbox.curselection()
+        if not sel:
+            return
+        self.entries.pop(sel[0])   # remove pelo índice da seleção
+        self.detail_var.set("")    # limpa o painel de detalhes
+        self._refresh_list()
+        self._plot()
+
+    def _clear_all(self):
+        """
+        Remove TODAS as curvas carregadas após confirmação do usuário.
+        Limpa também o gráfico e reinicia o estilo dos axes.
+        """
+        if not self.entries:
+            return
+        if messagebox.askyesno("Limpar", "Remover todos os arquivos?"):
+            self.entries.clear()
+            self.detail_var.set("")
+            self._refresh_list()
+            for ax in self.axes:
+                ax.cla()          # limpa completamente cada subplot
+            self._style_axes()   # reaplicar estilo após cla()
+            self.fig.tight_layout(pad=2.5)
+            self.canvas.draw()
+
+    def _rename_label(self):
+        """
+        Abre uma janela popup para editar o label de exibição da curva selecionada.
+        O label é usado apenas internamente; o filepath original não é alterado.
+        Confirma ao pressionar Enter ou clicar no botão.
+        """
+        sel = self.listbox.curselection()
+        if not sel:
+            messagebox.showinfo("Renomear", "Selecione um arquivo na lista primeiro.")
+            return
+        idx = sel[0]
+        win = tk.Toplevel(self)
+        win.title("Renomear")
+        win.configure(bg=COLOR_PANEL)
+        win.geometry("340x120")
+        win.resizable(False, False)
+        tk.Label(win, text="Novo label:", bg=COLOR_PANEL,
+                 fg=COLOR_TEXT, font=("Segoe UI", 10)).pack(pady=(14, 4))
+        ent = tk.Entry(win, font=("Segoe UI", 10), bg=COLOR_BTN,
+                       fg=COLOR_TEXT, insertbackground=COLOR_TEXT, relief="flat")
+        ent.insert(0, self.entries[idx].label)   # pré-preenche com o label atual
+        ent.pack(padx=20, fill="x")
+        ent.focus()
+
+        def apply(e=None):
+            v = ent.get().strip()
+            if v:
+                self.entries[idx].label = v   # salva o novo nome
+            self._refresh_list()
+            win.destroy()
+
+        ent.bind("<Return>", apply)    # atalho teclado: Enter confirma
+        self._btn(win, "Confirmar", apply, color=COLOR_SEL, fg="#000").pack(pady=8)
+
+    def _set_class(self, cls):
+        """
+        Classifica manualmente a curva selecionada como 'OK' ou 'NOK'.
+        Sobrescreve a classificação automática definida pelo nome do arquivo.
+        Redesenha o gráfico para refletir a mudança imediatamente.
+        """
+        sel = self.listbox.curselection()
+        if not sel:
+            messagebox.showinfo("Classificar", "Selecione um arquivo na lista primeiro.")
+            return
+        self.entries[sel[0]].classification = cls
+        self._refresh_list()
+        self._plot()
+
+    def _on_select(self, _event=None):
+        """
+        Callback chamado sempre que o usuário clica em um item da listbox.
+        Exibe no painel de detalhes os metadados do XML (data, hora, ciclo)
+        e estatísticas básicas da curva (número de pontos, curso e força máximos).
+        """
+        sel = self.listbox.curselection()
+        if not sel:
+            return
+        e = self.entries[sel[0]]
+        m = e.meta
+        curso_max = f"{max(e.x):.2f}" if e.x else "-"
+        forca_max = f"{max(e.y):.3f}" if e.y else "-"
+        self.detail_var.set(
+            f"Classe   : {e.classification} (pelo nome do arquivo)\n"
+            f"Programa : {m.get('program','')}\n"
+            f"Data/Hora: {m.get('date','')} {m.get('time','')}\n"
+            f"Ciclo    : {m.get('cycle','')}\n"
+            f"Pontos   : {len(e.x)}\n"
+            f"Curso max: {curso_max} mm\n"
+            f"Força max: {forca_max} kN"
+        )
+
+    # ------------------------------------------------------------------ plot
+    def _plot(self):
+        """
+        Redesenha completamente os dois subgráficos (OK e NOK).
+
+        Etapas:
+            1. Separa as entradas em dois grupos por classificação.
+            2. Limpa os axes e reaplicar o estilo.
+            3. Plota cada grupo com uma paleta de cores distinta (shades).
+            4. Define ticks do eixo X de 5 em 5 mm para facilitar leitura.
+            5. Desenha o retângulo da janela de aprovação em amarelo sobre ambos os gráficos.
+            6. Atualiza a barra de status com a contagem final.
+        """
+        ok_list  = [e for e in self.entries if e.classification == "OK"]
+        nok_list = [e for e in self.entries if e.classification == "NOK"]
+
+        for ax in self.axes:
+            ax.cla()         # apaga tudo do axes sem destruir o objeto
+        self._style_axes()   # reaplicar grid, cores, rótulos após o cla()
+
+        max_val = self._max_curves_var.get()
+        max_n = None if max_val == "Todas" else int(max_val)
+        show_legend = self._legend_var.get()
+
+        def draw_group(ax, entries, shades, title, title_color):
+            n_total = len(entries)
+            visible = entries[:max_n] if max_n is not None else entries
+            hidden  = n_total - len(visible)
+            suffix  = f" (+{hidden} oculta{'s' if hidden != 1 else ''})" if hidden else ""
+            ax.set_title(
+                f"{title}  ({n_total} curva{'s' if n_total != 1 else ''}){suffix}",
+                color=title_color, fontsize=13, fontweight="bold", pad=10
+            )
+            for i, e in enumerate(visible):
+                ax.plot(e.x, e.y,
+                        color=shades[i % len(shades)],
+                        linewidth=1.5, alpha=0.85,
+                        label=e.label)
+            if visible and show_legend:
+                ax.legend(loc="upper left", fontsize=8,
+                          facecolor="#2a2a3e", edgecolor="#45475a",
+                          labelcolor="#cdd6f4", framealpha=0.9)
+
+        draw_group(self.axes[0], ok_list,  OK_SHADES,  "OK",  COLOR_OK)
+        draw_group(self.axes[1], nok_list, NOK_SHADES, "NOK", COLOR_NOK)
+
+        # ── Ticks de 5 em 5 mm no eixo X ─────────────────────────────────────
+        # Calcula os ticks com base no intervalo real dos dados carregados,
+        # garantindo legibilidade independente do range do arquivo XML.
+        import numpy as np
+        all_x = [x for e in self.entries for x in e.x]
+        if all_x:
+            x_min = min(all_x)
+            x_max = max(all_x)
+            ticks = np.arange(
+                int(x_min // 5) * 5,          # arredonda para baixo no múltiplo de 5
+                int(x_max // 5) * 5 + 5 + 5,  # arredonda para cima + uma margem extra
+                5
+            )
+            for ax in self.axes:
+                ax.set_xticks(ticks)
+                ax.tick_params(axis="x", labelsize=9, rotation=0)
+
+        # ── Janela de aprovação ───────────────────────────────────────────────
+        # Lê os valores dos quatro campos de entrada e desenha:
+        #   - um retângulo semi-transparente amarelo (mpatches.Rectangle)
+        #   - o contorno sólido do retângulo (ax.plot)
+        #   - linhas horizontais pontilhadas em Y_min e Y_max para referência
+        #   - labels com os valores numéricos à esquerda do retângulo
+        try:
+            wx0 = float(self._win_xmin.get())   # X inicial da janela [mm]
+            wx1 = float(self._win_xmax.get())   # X final da janela [mm]
+            wy0 = float(self._win_ymin.get())   # Y mínimo da janela [kN]
+            wy1 = float(self._win_ymax.get())   # Y máximo da janela [kN]
+            for ax in self.axes:
+                # Preenchimento semi-transparente (alpha=0.08) para não ocultar as curvas
+                ax.add_patch(mpatches.Rectangle(
+                    (wx0, wy0), wx1 - wx0, wy1 - wy0,
+                    linewidth=1.8, edgecolor="#f1c40f",
+                    facecolor="#f1c40f", alpha=0.08, zorder=5,
+                    label=f"Janela ({wx0}–{wx1} mm | {wy0}–{wy1} kN)"
+                ))
+                # Contorno sólido sobre o preenchimento (zorder maior = desenhado por cima)
+                ax.plot([wx0, wx1, wx1, wx0, wx0],
+                        [wy0, wy0, wy1, wy1, wy0],
+                        color="#f1c40f", linewidth=1.8, zorder=6)
+                # Linhas de referência horizontais tracejadas para facilitar leitura de Y
+                ax.axhline(wy0, color="#f1c40f", linewidth=0.6, linestyle=":", alpha=0.5, zorder=4)
+                ax.axhline(wy1, color="#f1c40f", linewidth=0.6, linestyle=":", alpha=0.5, zorder=4)
+                # Labels numéricos posicionados à esquerda do retângulo
+                ax.text(wx0 - 0.5, wy0, f"{wy0:.2f} kN", color="#f1c40f",
+                        fontsize=8, va="center", ha="right", zorder=7)
+                ax.text(wx0 - 0.5, wy1, f"{wy1:.2f} kN", color="#f1c40f",
+                        fontsize=8, va="center", ha="right", zorder=7)
+        except (ValueError, AttributeError):
+            # Se algum campo estiver vazio ou inválido, simplesmente omite o retângulo
+            pass
+
+        self.fig.tight_layout(pad=2.5)
+        self.canvas.draw()
+        self._set_status(
+            f"{len(self.entries)} curva(s) carregada(s)  —  "
+            f"{len(ok_list)} OK  /  {len(nok_list)} NOK"
+        )
+
+    # ------------------------------------------------------------------ salvar
+    def _save_plot(self):
+        """
+        Exporta o gráfico atual para um arquivo de imagem (PNG, PDF ou SVG).
+        O fundo escuro do tema é preservado no arquivo exportado.
+        """
+        if not self.entries:
+            messagebox.showinfo("Salvar", "Nenhuma curva carregada.")
+            return
+        path = filedialog.asksaveasfilename(
+            defaultextension=".png",
+            initialfile="force_curves_comparison.png",
+            filetypes=[("PNG", "*.png"), ("PDF", "*.pdf"), ("SVG", "*.svg")],
+            title="Salvar gráfico"
+        )
+        if path:
+            # facecolor garante que o fundo escuro do figure seja mantido no arquivo salvo
+            self.fig.savefig(path, dpi=200, bbox_inches="tight",
+                             facecolor=self.fig.get_facecolor())
+            self._set_status(f"Salvo: {os.path.basename(path)}")
+
+    # ------------------------------------------------------------------ utils
+    def _refresh_list(self):
+        """
+        Reconstrói do zero a listbox com base em self.entries.
+        Cada item recebe ícone (✔/✘) e cor de acordo com a classificação da curva.
+        Atualiza também a barra de status com a contagem atual.
+        """
+        self.listbox.delete(0, "end")
+        for e in self.entries:
+            icon  = "✔" if e.classification == "OK" else "✘"
+            color = COLOR_OK if e.classification == "OK" else COLOR_NOK
+            self.listbox.insert("end", f" {icon}  {e.label}")
+            self.listbox.itemconfig("end", fg=color)  # cor do texto por item
+        n_ok  = sum(1 for e in self.entries if e.classification == "OK")
+        n_nok = sum(1 for e in self.entries if e.classification == "NOK")
+        self._set_status(f"{len(self.entries)} arquivo(s) — {n_ok} OK / {n_nok} NOK")
+
+    def _set_status(self, msg):
+        """Atualiza a mensagem exibida na barra de status do painel esquerdo."""
+        self.status_var.set(msg)
+
+
+# =============================================================================
+# PONTO DE ENTRADA
+# =============================================================================
+if __name__ == "__main__":
+    app = App()
+
+    # Suporte a pré-carregamento via linha de comando:
+    #   python force_curve_comparator.py arquivo1.xml arquivo2.xml
+    # Útil para integração com scripts batch ou atalhos de área de trabalho.
+    for arg in sys.argv[1:]:
+        if os.path.isfile(arg) and arg.lower().endswith(".xml"):
+            try:
+                app.entries.append(CurveEntry(arg, auto_classify(arg)))
+            except Exception as e:
+                print(f"[AVISO] {arg}: {e}")   # imprime no terminal sem bloquear a GUI
+
+    # Se arquivos foram pré-carregados, já mostra a lista e plota na abertura
+    if app.entries:
+        app._refresh_list()
+        app._plot()
+
+    app.mainloop()   # inicia o loop de eventos do tkinter (bloqueia até fechar a janela)
