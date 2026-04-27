@@ -210,6 +210,23 @@ def engagement_force(pressure_MPa, area_mm2, mu):
     F_kgf = F_N / 9.81
     return F_N, F_kgf
 
+def mu_eff_speed(mu_dry, mu_lubed, v_mm_s, v_ref=15.0):
+    """Coeficiente de atrito efetivo vs velocidade de insercao (Stribeck simplificado).
+    v->0: retorna mu_dry (sem filme).  v>>v_ref: converge para mu_lubed (filme completo).
+    v_ref=15 mm/s e valor tipico para montagem prensada lubrificada."""
+    return mu_lubed + (mu_dry - mu_lubed) * math.exp(-max(v_mm_s, 0.0) / v_ref)
+
+def insertion_curve(p_MPa, d_mm, w_mm, mu_dry, mu_lubed, v_mm_s,
+                    n_pts=300, v_ref=15.0):
+    """Curva F(x) durante insercao do eixo no cubo.
+    Retorna (x_mm, F_dry_kN, F_lubed_kN, mu_eff)."""
+    mu_v = mu_eff_speed(mu_dry, mu_lubed, v_mm_s, v_ref)
+    x = np.linspace(0.0, w_mm, n_pts)
+    A_x = math.pi * d_mm * x          # area de contato progressiva [mm2]
+    F_dry   = p_MPa * A_x * mu_dry  / 1000.0
+    F_lubed = p_MPa * A_x * mu_v    / 1000.0
+    return x, F_dry, F_lubed, mu_v
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Widgets auxiliares
 # ─────────────────────────────────────────────────────────────────────────────
@@ -893,6 +910,70 @@ class AbaInterferencia(tk.Frame):
         self._canvas_interf.get_tk_widget().pack(fill="x")
         self._placeholder_interf()
 
+        # ── Curva de Inserção ─────────────────────────────────────────────────
+        tk.Frame(W, bg=BORDER, height=1).pack(fill="x", padx=20, pady=(10,4))
+        ins_hdr_f = tk.Frame(W, bg=BG2)
+        ins_hdr_f.pack(fill="x", padx=0)
+        tk.Label(ins_hdr_f, text="  CURVA DE INSERCAO — Forca x Deslocamento",
+                 bg=BG2, fg=ACCENT, font=("Courier",10,"bold"),
+                 anchor="w", pady=6).pack(side="left")
+        tk.Label(ins_hdr_f, text="Stribeck simplificado (v_ref=15 mm/s)  ",
+                 bg=BG2, fg=FG_DIM, font=("Helvetica",8), anchor="e").pack(side="right")
+
+        ins_ctrl = tk.Frame(W, bg=BG)
+        ins_ctrl.pack(fill="x", padx=20, pady=(6,2))
+        tk.Label(ins_ctrl, text="Velocidade [mm/s]:", bg=BG, fg=FG_DIM,
+                 font=("Courier",9)).pack(side="left")
+        self._v_ins_speed = tk.StringVar(value="10")
+        tk.Entry(ins_ctrl, textvariable=self._v_ins_speed, width=7,
+                 bg=BG2, fg=ACCENT, insertbackground=FG,
+                 font=("Courier",10), relief="flat",
+                 highlightthickness=1, highlightbackground=BORDER,
+                 highlightcolor=ACCENT).pack(side="left", padx=(6,18))
+        tk.Label(ins_ctrl, text="Comparar com [mm/s]:", bg=BG, fg=FG_DIM,
+                 font=("Courier",9)).pack(side="left")
+        self._v_ins_comp = tk.StringVar(value="2, 5, 20, 50, 100")
+        tk.Entry(ins_ctrl, textvariable=self._v_ins_comp, width=24,
+                 bg=BG2, fg=FG_DIM, insertbackground=FG,
+                 font=("Courier",10), relief="flat",
+                 highlightthickness=1, highlightbackground=BORDER,
+                 highlightcolor=ACCENT).pack(side="left", padx=(6,16))
+        tk.Button(ins_ctrl, text="Atualizar Curva",
+                  command=self._atualizar_insercao,
+                  bg=BG2, fg=ACCENT, font=("Courier",9,"bold"),
+                  relief="flat", padx=10, pady=3, cursor="hand2",
+                  activebackground=BG, activeforeground=ACCENT).pack(side="left")
+
+        ins_ctrl2 = tk.Frame(W, bg=BG)
+        ins_ctrl2.pack(fill="x", padx=20, pady=(2,4))
+        tk.Label(ins_ctrl2, text="Pos. inicial [mm]:", bg=BG, fg=FG_DIM,
+                 font=("Courier",9)).pack(side="left")
+        self._v_ins_x0 = tk.StringVar(value="51")
+        tk.Entry(ins_ctrl2, textvariable=self._v_ins_x0, width=7,
+                 bg=BG2, fg=FG_DIM, insertbackground=FG,
+                 font=("Courier",10), relief="flat",
+                 highlightthickness=1, highlightbackground=BORDER,
+                 highlightcolor=ACCENT).pack(side="left", padx=(6,18))
+        tk.Label(ins_ctrl2, text="Aproximacao [mm]:", bg=BG, fg=FG_DIM,
+                 font=("Courier",9)).pack(side="left")
+        self._v_ins_apx = tk.StringVar(value="54")
+        tk.Entry(ins_ctrl2, textvariable=self._v_ins_apx, width=7,
+                 bg=BG2, fg=FG_DIM, insertbackground=FG,
+                 font=("Courier",10), relief="flat",
+                 highlightthickness=1, highlightbackground=BORDER,
+                 highlightcolor=ACCENT).pack(side="left", padx=(6,0))
+
+        ins_frame = tk.Frame(W, bg=BG)
+        ins_frame.pack(fill="x", padx=20, pady=(0,4))
+        self._fig_ins, self._ax_ins = plt.subplots(1, 1, figsize=(13, 4.5), facecolor=BG)
+        self._fig_ins.tight_layout(pad=2.5)
+        self._ax_ins.set_facecolor(BG3)
+        for sp in self._ax_ins.spines.values(): sp.set_edgecolor(BORDER)
+        self._ax_ins.tick_params(colors=FG_DIM, labelsize=8)
+        self._canvas_ins = FigureCanvasTkAgg(self._fig_ins, master=ins_frame)
+        self._canvas_ins.get_tk_widget().pack(fill="x")
+        self._placeholder_insercao()
+
         # ── Botao PDF ─────────────────────────────────────────────────────────
         pdf_frame = tk.Frame(W, bg=BG)
         pdf_frame.pack(fill="x", padx=20, pady=(0,20))
@@ -1006,6 +1087,7 @@ class AbaInterferencia(tk.Frame):
         self._v_avg_N.set(  f"{r['avg_N']:.1f} N")
         self._v_avg_kgf.set(f"{r['avg_kgf']:.1f} kgf")
         self._plotar(r)
+        self._atualizar_insercao()
 
     def _plotar(self, r):
         ax = self._ax_interf; ax.clear(); ax.set_facecolor(BG3)
@@ -1037,6 +1119,115 @@ class AbaInterferencia(tk.Frame):
         for sp in ax.spines.values(): sp.set_edgecolor(BORDER)
         ax.tick_params(colors=FG_DIM, labelsize=8)
         self._canvas_interf.draw()
+
+    def _placeholder_insercao(self):
+        ax = self._ax_ins; ax.clear(); ax.set_facecolor(BG3)
+        ax.text(0.5, 0.5,
+            "sem dados\nPreencha os parametros e clique  >>  CALCULAR INTERFERENCIA",
+            transform=ax.transAxes, ha="center", va="center",
+            color="#2a3a44", fontsize=9, multialignment="center")
+        for sp in ax.spines.values(): sp.set_edgecolor(BORDER)
+        ax.tick_params(colors=FG_DIM, labelsize=8)
+        self._canvas_ins.draw()
+
+    def _atualizar_insercao(self):
+        if self._resultado is None:
+            return
+        try:
+            v = float(self._v_ins_speed.get().replace(",", "."))
+        except ValueError:
+            messagebox.showerror("Erro", "Velocidade invalida. Use ponto como decimal."); return
+        try:
+            comp = [float(s.strip()) for s in self._v_ins_comp.get().split(",") if s.strip()]
+        except ValueError:
+            comp = []
+        try:
+            x0  = float(self._v_ins_x0.get().replace(",", "."))
+        except ValueError:
+            x0 = 0.0
+        try:
+            apx = float(self._v_ins_apx.get().replace(",", "."))
+        except ValueError:
+            apx = 0.0
+        self._plotar_insercao(self._resultado, v, comp, x0, apx)
+
+    def _plotar_insercao(self, r, v_mm_s, comp_speeds=None, x0=0.0, apx=0.0):
+        import matplotlib.transforms as mtransforms
+        ax = self._ax_ins; ax.clear(); ax.set_facecolor(BG3)
+
+        # Lista completa de velocidades (principal + comparacao), sem duplicatas, ordenada
+        all_speeds = sorted(set([v_mm_s] + (comp_speeds or [])))
+        n_v = len(all_speeds)
+
+        # Paleta de verdes para curvas lubrificadas (mais velocidade = verde mais escuro)
+        lub_palette = plt.cm.YlGn(np.linspace(0.35, 0.90, n_v))
+
+        # Fase de aproximacao (F=0) + fase de insercao no referencial absoluto da maquina
+        n_apx = max(2, int(apx * 3))
+        x_apx = np.linspace(x0, x0 + apx, n_apx)
+        F_apx = np.zeros(n_apx)
+
+        # Curva seca (independe da velocidade) — calculada uma vez
+        x_ins, F_dry, _, _ = insertion_curve(
+            r["pmax"], r["d"], r["w_nom"], r["mu_dry"], r["mu_lubed"], 0.0)
+        x_ins_abs = x_ins + x0 + apx  # deslocamento absoluto
+
+        x_full     = np.concatenate([x_apx, x_ins_abs])
+        F_dry_full = np.concatenate([F_apx, F_dry])
+
+        # Linha horizontal de pico seco
+        ax.axhline(F_dry[-1], color=ACCENT, lw=0.8, ls=":", alpha=0.5)
+
+        # Curva seca — destaque visual alto, plotada por ultimo para ficar no topo
+        ax.plot(x_full, F_dry_full, color=ACCENT, lw=2.5, zorder=20,
+                label=f"— SECO  μ={r['mu_dry']:.2f}  │  F_max={F_dry[-1]:.2f} kN")
+
+        # Curvas lubrificadas para cada velocidade
+        for i, v in enumerate(all_speeds):
+            is_main = abs(v - v_mm_s) < 0.01
+            _, _, F_lub, mu_v = insertion_curve(
+                r["pmax"], r["d"], r["w_nom"], r["mu_dry"], r["mu_lubed"], v)
+            F_lub_full = np.concatenate([F_apx, F_lub])
+            lw   = 2.3 if is_main else 1.4
+            zord = 15  if is_main else 8
+            ls   = "-" if is_main else "--"
+            marker = " ★" if is_main else ""
+            ax.plot(x_full, F_lub_full, ls=ls, color=lub_palette[i], lw=lw, zorder=zord,
+                    label=f"Lubr. {v:.0f} mm/s{marker}  μ_ef={mu_v:.3f}  │  F={F_lub[-1]:.2f} kN")
+            # Linha pontilhada de pico
+            ax.axhline(F_lub[-1], color=lub_palette[i], lw=0.6, ls=":", alpha=0.35)
+
+        # Marcadores de largura (no referencial absoluto)
+        for w_val, w_lbl, w_col in [
+            (r["w_nom"], "w_nom", PURPLE),
+            (r["w_lo"],  "w_lo",  FG_DIM),
+            (r["w_up"],  "w_up",  FG_DIM),
+        ]:
+            ax.axvline(x0 + apx + w_val, color=w_col, lw=1.0, ls="--", alpha=0.4)
+            trans = mtransforms.blended_transform_factory(ax.transData, ax.transAxes)
+            ax.text(x0 + apx + w_val + r["w_nom"] * 0.008, 0.03, w_lbl,
+                    transform=trans, color=w_col, fontsize=7, va="bottom")
+
+        # Eixo X: label "mm" posicionado à direita (igual à máquina)
+        ax.set_xlabel("mm", color=FG_DIM, fontsize=9, labelpad=4)
+        ax.xaxis.set_label_coords(1.02, -0.04)
+        # Eixo Y: label "Kn" posicionado no topo, sem rotação (igual à máquina)
+        ax.set_ylabel("Kn", rotation=0, color=FG_DIM, fontsize=9, labelpad=6)
+        ax.yaxis.set_label_coords(-0.06, 1.03)
+        mu_main = mu_eff_speed(r["mu_dry"], r["mu_lubed"], v_mm_s)
+        ax.set_title(
+            f"Curva de insercao  |  p={r['pmax']:.2f} MPa  |  seco={r['mu_dry']:.2f}  |  "
+            f"lubr. v★={v_mm_s:.1f} mm/s → μ_ef={mu_main:.3f}  |  Stribeck v_ref=15 mm/s",
+            color=FG_DIM, fontsize=8, pad=6)
+        ncol = max(1, (n_v + 1 + 1) // 3)
+        ax.legend(fontsize=7, facecolor=BG2, edgecolor=BORDER, labelcolor=FG,
+                  loc="upper left", ncol=ncol)
+        for sp in ax.spines.values(): sp.set_edgecolor(BORDER)
+        ax.tick_params(colors=FG_DIM, labelsize=8)
+        ax.grid(True, linestyle="--", alpha=0.3, color=FG_DIM, linewidth=0.5)
+        ax.set_xlim([x0, x0 + apx + r["w_nom"] * 1.05])
+        ax.set_ylim([0, None])
+        self._fig_ins.tight_layout(pad=2.0); self._canvas_ins.draw()
 
     def _exportar_pdf(self):
         if self._resultado is None:
@@ -1162,6 +1353,65 @@ class AbaInterferencia(tk.Frame):
         ], [PW*0.30, PW*0.175, PW*0.175, PW*0.175, PW*0.175]))
         story.append(Paragraph("Grafico - Forca por Caso de Largura", s_s))
         story.append(RLImage(buf, width=PW*0.85, height=PW*0.85*3.5/7))
+        story.append(Spacer(1, 6))
+
+        # ── Curva de insercao no PDF ──────────────────────────────────────────
+        try:
+            v_pdf = float(self._v_ins_speed.get().replace(",", "."))
+        except ValueError:
+            v_pdf = 10.0
+        try:
+            comp_pdf = [float(s.strip()) for s in self._v_ins_comp.get().split(",") if s.strip()]
+        except ValueError:
+            comp_pdf = [2, 5, 20, 50, 100]
+
+        all_speeds_pdf = sorted(set([v_pdf] + comp_pdf))
+        n_v_pdf = len(all_speeds_pdf)
+        lub_pal_pdf = plt.cm.YlGn(np.linspace(0.35, 0.90, n_v_pdf))
+
+        fig_ins_p, ax_ins_p = plt.subplots(1, 1, figsize=(9, 4.0), facecolor="white")
+        x_p, F_dry_p, _, _ = insertion_curve(
+            r["pmax"], r["d"], r["w_nom"], r["mu_dry"], r["mu_lubed"], 0.0)
+        ax_ins_p.axhline(F_dry_p[-1], color="#0055aa", lw=0.7, ls=":", alpha=0.5)
+        for i, v_i in enumerate(all_speeds_pdf):
+            is_main = abs(v_i - v_pdf) < 0.01
+            _, _, F_lub_i, mu_i = insertion_curve(
+                r["pmax"], r["d"], r["w_nom"], r["mu_dry"], r["mu_lubed"], v_i)
+            lw = 2.0 if is_main else 1.2
+            ls = "-" if is_main else "--"
+            mk = " ★" if is_main else ""
+            ax_ins_p.plot(x_p, F_lub_i, ls=ls, color=lub_pal_pdf[i], lw=lw,
+                          label=f"Lubr. {v_i:.0f} mm/s{mk}  μ_ef={mu_i:.3f}  F={F_lub_i[-1]:.2f} kN")
+            ax_ins_p.axhline(F_lub_i[-1], color=lub_pal_pdf[i], lw=0.5, ls=":", alpha=0.35)
+        ax_ins_p.plot(x_p, F_dry_p, color="#0055aa", lw=2.2,
+                      label=f"SECO  μ={r['mu_dry']:.2f}  F={F_dry_p[-1]:.2f} kN", zorder=10)
+        ax_ins_p.axvline(r["w_nom"], color="#8800cc", lw=1.0, ls="--", alpha=0.5,
+                         label=f"w_nom={r['w_nom']:.2f} mm")
+        ax_ins_p.set_xlabel("mm", fontsize=9, labelpad=4)
+        ax_ins_p.xaxis.set_label_coords(1.02, -0.04)
+        ax_ins_p.set_ylabel("Kn", rotation=0, fontsize=9, labelpad=6)
+        ax_ins_p.yaxis.set_label_coords(-0.06, 1.03)
+        ax_ins_p.set_title(
+            f"Curva de insercao  |  seco μ={r['mu_dry']:.2f}  |  "
+            f"lubr. ★ v={v_pdf:.1f} mm/s  |  Stribeck v_ref=15 mm/s",
+            fontsize=9)
+        ncol_pdf = max(1, (n_v_pdf + 2) // 3)
+        ax_ins_p.legend(fontsize=6.5, loc="upper left", ncol=ncol_pdf)
+        ax_ins_p.tick_params(labelsize=7)
+        ax_ins_p.set_xlim([0, None]); ax_ins_p.set_ylim([0, None])
+        buf_ins = io.BytesIO()
+        fig_ins_p.savefig(buf_ins, format="png", dpi=150, bbox_inches="tight", facecolor="white")
+        buf_ins.seek(0); plt.close(fig_ins_p)
+
+        story.append(Paragraph("Grafico - Curva de Insercao (Forca x Deslocamento)", s_s))
+        story.append(RLImage(buf_ins, width=PW*0.85, height=PW*0.85*3.5/7))
+        story.append(Spacer(1, 4))
+        story.append(Paragraph(
+            f"Modelo de atrito: Stribeck simplificado (v_ref=15 mm/s). "
+            f"Velocidade selecionada (★): {v_pdf:.1f} mm/s. "
+            f"Velocidades comparadas: {', '.join(f'{v:.0f}' for v in all_speeds_pdf)} mm/s. "
+            f"Curva seca independe da velocidade. A forca cresce linearmente com o deslocamento "
+            f"(area de contato proporcional a insercao).", s_n))
         story.append(Spacer(1, 4))
         story.append(Paragraph(
             "Aviso: Calculos baseados na teoria classica de Lame (elasticidade linear). "
