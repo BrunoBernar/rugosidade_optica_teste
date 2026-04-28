@@ -44,11 +44,9 @@ Name: "autoupdate";   Description: "Verificar atualizacoes automaticamente ao in
 [Files]
 Source: "dist\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "stellantis.ico";     DestDir: "{app}"; Flags: ignoreversion
-Source: "manual.pdf";         DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\{#AppName}";              Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\stellantis.ico"
-Name: "{group}\Manual do Usuario";       Filename: "{app}\manual.pdf"
 Name: "{group}\Desinstalar {#AppName}";  Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}";        Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\stellantis.ico"; Tasks: desktopicon
 

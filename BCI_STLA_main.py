@@ -3555,21 +3555,209 @@ class App(tk.Tk):
                   command=_save).pack(pady=(10, 20))
 
     def _open_help(self):
-        candidates = [
-            os.path.join(_SCRIPT_DIR, "manual.pdf"),
-            os.path.join(_SCRIPT_DIR, "Manual.pdf"),
-            os.path.join(_SCRIPT_DIR, "BCI_KNUCKLE_MANUAL.pdf"),
-            os.path.join(_SCRIPT_DIR, "ajuda.pdf"),
-        ]
-        for pdf in candidates:
-            if os.path.exists(pdf):
-                os.startfile(pdf)
-                return
-        messagebox.showinfo(
-            "Ajuda — BCI KNUCKLE SOFTWARE",
-            "Manual não encontrado.\n\n"
-            "Coloque o arquivo 'manual.pdf' na mesma pasta do software e tente novamente."
-        )
+        win = tk.Toplevel(self)
+        win.title("Ajuda — BCI KNUCKLE SOFTWARE")
+        win.configure(bg=BG)
+        win.geometry("820x640")
+        win.resizable(True, True)
+        win.grab_set()
+
+        frame = tk.Frame(win, bg=BG)
+        frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        sb = tk.Scrollbar(frame)
+        sb.pack(side="right", fill="y")
+        txt = tk.Text(frame, bg="#0d1117", fg=FG, font=("Courier", 9),
+                      wrap="word", yscrollcommand=sb.set,
+                      relief="flat", padx=12, pady=10,
+                      selectbackground=ACCENT, insertbackground=FG)
+        txt.pack(side="left", fill="both", expand=True)
+        sb.config(command=txt.yview)
+
+        txt.tag_configure("h1",  font=("Courier", 11, "bold"), foreground=ACCENT)
+        txt.tag_configure("h2",  font=("Courier", 10, "bold"), foreground=GOLD)
+        txt.tag_configure("sep", foreground=FG_DIM)
+        txt.tag_configure("kw",  foreground=GOLD)
+
+        def h1(t):
+            txt.insert("end", f"\n{'━'*70}\n", "sep")
+            txt.insert("end", f"  {t}\n", "h1")
+            txt.insert("end", f"{'━'*70}\n", "sep")
+        def h2(t):
+            txt.insert("end", f"\n  {t}\n", "h2")
+        def body(t):
+            txt.insert("end", f"  {t}\n")
+        def bullet(items):
+            for i in items:
+                txt.insert("end", f"    • {i}\n")
+        def nl():
+            txt.insert("end", "\n")
+
+        txt.insert("end", "  BCI — KNUCKLE SOFTWARE  |  Documentacao Tecnica\n", "h1")
+        txt.insert("end", "  Autor: Bruno Bernardinetti — Stellantis | Brasil\n", "sep")
+        txt.insert("end", f"  Versao: {self._ver}\n", "sep")
+        nl()
+
+        h1("1. INTRODUCAO")
+        body("Ferramenta de engenharia com quatro modulos principais:")
+        bullet([
+            "Modulo 1 — Analise de Rugosidade por Imagem (parametro Ra)",
+            "Modulo 2 — Calculo de Interferencia Knuckle Press-Fit (Lame)",
+            "Modulo 3 — Comparador de Curvas XML (prensas maXYmos/Kistler)",
+            "Modulo 4 — Golden Curve Analyzer (deteccao de anomalias)",
+        ])
+        nl()
+        body("AVISO: O software nao substitui medicao por rugosimetro calibrado nem FEA.")
+        body("Atualizacoes automaticas a cada 7 dias via GitHub. Botao ? = este manual.")
+
+        h1("2. MODULO 1 — RUGOSIDADE POR IMAGEM")
+        h2("2.1 Metodo")
+        body("Estima Ra a partir de metricas de textura de imagens em escala de cinza,")
+        body("calibradas por uma peca de referencia com Ra real conhecido.")
+        h2("2.2 Metricas calculadas por imagem")
+        bullet([
+            "Ra proxy   = mean( |I - mean(I)| )",
+            "Rq         = sqrt( mean( (I - mean(I))^2 ) )",
+            "Rz         = mean(5 maximos) - mean(5 minimos)",
+            "Gradiente  = mean( sqrt(Gx^2 + Gy^2) )  [filtro Sobel]",
+            "Entropia   = -sum( p * log2(p) )  [histograma 256 niveis]",
+        ])
+        h2("2.3 Calibracao")
+        body("  fator = Ra_real_ref / Ra_proxy_medio_ref")
+        body("  Metrica_cal = Metrica_proxy x fator")
+        body("PREMISSA: relacao linear entre pixel e micrometros. Iluminacao e aumento")
+        body("devem ser identicos entre referencia e peca medida.")
+        h2("2.4 Classes ISO 1302 / AFNOR")
+        bullet([
+            "N1  Ra<=0.025  Superacabamento/espelho",
+            "N2  Ra<=0.05   Retificacao fina",
+            "N3  Ra<=0.1    Retificacao",
+            "N4  Ra<=0.2    Retificacao grossa",
+            "N5  Ra<=0.4    Torneamento/fresamento fino",
+            "N6  Ra<=0.8    Torneamento convencional",
+            "N7  Ra<=1.6    Fresamento grosso",
+            "N8  Ra<=3.2    Desbaste",
+            "N9  Ra<=6.3    Fundicao/forjamento",
+            "N10 Ra<=12.5   Fundicao bruta",
+            "N11 Ra<=25.0   Corte a chama",
+            "N12 Ra>=50.0   Superficie bruta",
+        ])
+        h2("2.5 Como usar")
+        bullet([
+            "1. Carregar >=10 imagens da peca REFERENCIA com Ra real conhecido.",
+            "2. Informar o Ra real em micrometros.",
+            "3. Carregar >=10 imagens da peca A MEDIR (mesma iluminacao e aumento).",
+            "4. Clicar ANALISAR. Resultados e graficos exibidos automaticamente.",
+            "5. (Opcional) Exportar PDF do relatorio.",
+        ])
+
+        h1("3. MODULO 2 — INTERFERENCIA (PRESS-FIT / LAME)")
+        h2("3.1 Equacoes de Lame")
+        body("  p = delta_eff / [ R x (C_hub + C_shaft) ]")
+        body("  C_hub   = (1/Eo) x [ (Ro^2+R^2)/(Ro^2-R^2) + vo ]")
+        body("  C_shaft = (1/Ei) x [ (R^2+Ri^2)/(R^2-Ri^2) - vi ]")
+        h2("3.2 Correcao de rugosidade (DIN 7190)")
+        body("  delta_eff = delta_nom - (Ra_eixo + Ra_cubo) x 1e-3  [mm]")
+        h2("3.3 Forca de encaixe")
+        body("  F = p x A x mu   onde   A = pi x d x w")
+        body("  mu_seco=0.40 / mu_lubr=0.21 (referencia Stellantis)")
+        h2("3.4 Modelo de Stribeck")
+        body("  mu_ef(v) = mu_lubr + (mu_seco - mu_lubr) x exp(-v / 15)")
+        h2("3.5 Como usar")
+        bullet([
+            "1. Preencher parametros do EIXO e do CUBO (Young, Poisson, diametros, Ra).",
+            "2. Informar largura de contato e coeficientes de atrito.",
+            "3. Clicar >> CALCULAR INTERFERENCIA.",
+            "4. Ajustar velocidade e clicar Atualizar Curva para re-plotar Stribeck.",
+            "5. (Opcional) Exportar PDF.",
+        ])
+
+        h1("4. MODULO 3 — COMPARADOR DE CURVAS XML")
+        h2("4.1 Finalidade")
+        body("Importa, visualiza e classifica curvas Forca x Curso de prensas")
+        body("maXYmos NC (Kistler/Sinpac) exportadas em formato XML.")
+        h2("4.2 Classificacao OK/NOK — ordem de prioridade")
+        bullet([
+            "1. Campo <Total_result> no XML ('OK' ou 'NOK').",
+            "2. Sufixo _OK / _NOK no nome do arquivo.",
+            "3. Classificacao manual pelo usuario.",
+        ])
+        h2("4.3 Como usar")
+        bullet([
+            "1. Clicar Adicionar XML(s) e selecionar arquivos da prensa.",
+            "2. Usar filtros Ponto/Ano para segmentar visualizacao.",
+            "3. (Opcional) Reclassificar curvas manualmente com botoes OK/NOK.",
+            "4. Definir janela de aprovacao (X/Y min/max) e aplicar.",
+            "5. Salvar grafico em PNG/PDF/SVG.",
+        ])
+
+        h1("5. MODULO 4 — GOLDEN CURVE ANALYZER")
+        h2("5.1 Conceito")
+        body("Aprende o comportamento nominal de um press-fit a partir de N curvas OK,")
+        body("gerando curva teorica media com banda de confianca calibrada.")
+        h2("5.2 Algoritmo")
+        bullet([
+            "Grade X = interseccao dos dominios de todas as curvas.",
+            "Cada curva interpolada linearmente na grade (scipy.interp1d, 500 pts).",
+            "Estatisticas ponto a ponto: mean, std, median, P05/P95, P25/P75.",
+            "Ajuste polinomial grau N (padrao 6) por minimos quadrados (numpy.polyfit).",
+            "Ajuste spline cubico (scipy.UnivariateSpline, k=3).",
+        ])
+        h2("5.3 Score de anomalia")
+        body("  z(x)          = |F_nova(x) - mean(x)| / std(x)")
+        body("  outside_frac  = mean(z > sigma_thr)   [sigma padrao=3.0]")
+        body("  score         = clip( mean(z)/thr * 50, 0, 100 )")
+        body("  Veredito OK   se outside_frac < 5% E score < 40")
+        h2("5.4 Como usar")
+        bullet([
+            "1. Carregar curvas OK via Adicionar XML/CSV ou Importar OK do Comparador.",
+            "2. (Opcional) Filtrar por Ponto/Ano.",
+            "3. Ajustar grau do polinomio, sigma, suavizacao, N pontos.",
+            "4. Clicar GERAR GOLDEN CURVE.",
+            "5. Para anomalia: carregar curva(s) de teste -> Avaliar anomalia.",
+            "6. Exportar coeficientes CSV, PDF ou PNG.",
+        ])
+
+        h1("6. ARQUITETURA")
+        h2("6.1 Dependencias")
+        bullet([
+            "Python 3.10+  |  tkinter (built-in)  |  NumPy 1.24+",
+            "Pillow 9.0+   |  SciPy 1.10+         |  Matplotlib 3.7+",
+            "ReportLab 3.6+  |  xml.etree (built-in)  |  threading (built-in)",
+        ])
+        h2("6.2 Classes principais")
+        bullet([
+            "App              — Janela principal, abas, versao, trial, updates.",
+            "AbaRugosidade    — Modulo 1.",
+            "AbaInterferencia — Modulo 2.",
+            "AbaXMLComparator — Modulo 3.",
+            "AbaGoldenCurve   — Modulo 4.",
+            "GoldenCurveAnalyzer — Logica estatistica pura do Modulo 4.",
+            "_UpdateBalloon   — Balao estilo Windows 7 para notificacao de update.",
+        ])
+        h2("6.3 Atualizacoes")
+        body("Verificacao a cada 7 dias em thread separada (nao bloqueia GUI).")
+        body("Settings em: %APPDATA%\\BCI-Knuckle\\settings.json")
+        body("Modo dev (pasta com .git): trial e updates desativados.")
+
+        h1("7. REFERENCIAS")
+        bullet([
+            "ISO 1302:2002 — Surface texture indication.",
+            "DIN 7190-1:2017 — Interference fits.",
+            "Lame, G. (1852) — Theorie de l'elasticite.",
+            "Shigley & Budynas (2011) — Mechanical Engineering Design, 9ed.",
+            "Stribeck, R. (1902) — Gleit- und Rollenlager. VDI.",
+            "Gonzalez & Woods (2018) — Digital Image Processing, 4ed.",
+            "AFNOR NF E 05-015 — Rugosite.",
+            "SciPy docs — interp1d, UnivariateSpline, ndimage.sobel.",
+        ])
+        nl()
+        txt.insert("end", f"  github.com/BrunoBernar/rugosidade_optica_teste\n", "sep")
+
+        txt.config(state="disabled")
+        tk.Button(win, text="Fechar", bg=BG2, fg=FG, relief="flat",
+                  font=("Courier", 9), cursor="hand2",
+                  command=win.destroy).pack(pady=(0, 8))
 
     def _build_ui(self):
         hdr = tk.Frame(self, bg=BG, padx=20, pady=10)
