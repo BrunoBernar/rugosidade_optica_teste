@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+*.spec.log
+
+# PyInstaller output
+dist/
+build/
+installer_output/
+
+# PDFs gerados (rebuilt via gerar_manual.py)
+manual.pdf
+
+# Dados de teste volumosos
+XML_EXCESS/
+XML_EXCESS.7z
+
+# IDE / OS
+.vscode/
+*.suo
+*.user
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Trial / licença (dados locais do usuário)
+inst.dat
+settings.json

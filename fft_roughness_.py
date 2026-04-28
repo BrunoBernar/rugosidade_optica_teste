@@ -168,7 +168,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from scipy.ndimage import sobel
-import os, io, datetime, math, re, subprocess, threading, urllib.request, json
+import os, io, datetime, math, re, subprocess, threading, urllib.request, json, base64, base64
 
 # ── Versão e update ───────────────────────────────────────────────────────────
 __version__  = "v1.0.0"          # atualizar a cada release/tag no git
@@ -191,10 +191,61 @@ def _get_app_version() -> str:
             pass
     return __version__
 
+_IS_DEV = os.path.exists(os.path.join(_SCRIPT_DIR, ".git"))
+
+# ── Trial / Configurações ─────────────────────────────────────────────────────
+_APP_DATA_DIR = os.path.join(os.environ.get("APPDATA", _SCRIPT_DIR), "BCI-Knuckle")
+_INST_FILE    = os.path.join(_APP_DATA_DIR, "inst.dat")
+_SETT_FILE    = os.path.join(_APP_DATA_DIR, "settings.json")
+_TRIAL_DAYS   = 7
+_CONTATO      = "+55 32 9 9965-0392"
+
+
+def _get_settings() -> dict:
+    try:
+        if os.path.exists(_SETT_FILE):
+            with open(_SETT_FILE) as f:
+                return json.loads(f.read())
+    except Exception:
+        pass
+    return {}
+
+
+def _save_settings(d: dict):
+    os.makedirs(_APP_DATA_DIR, exist_ok=True)
+    with open(_SETT_FILE, "w") as f:
+        json.dump(d, f)
+
+
+def _get_or_create_install_date() -> datetime.date:
+    os.makedirs(_APP_DATA_DIR, exist_ok=True)
+    if os.path.exists(_INST_FILE):
+        try:
+            raw = open(_INST_FILE).read().strip()
+            iso = base64.b64decode(raw.encode()).decode()
+            return datetime.date.fromisoformat(iso)
+        except Exception:
+            pass
+    today = datetime.date.today()
+    with open(_INST_FILE, "w") as f:
+        f.write(base64.b64encode(today.isoformat().encode()).decode())
+    return today
+
+
+def _trial_days_left() -> int:
+    if _IS_DEV:
+        return _TRIAL_DAYS
+    install = _get_or_create_install_date()
+    elapsed = (datetime.date.today() - install).days
+    return max(0, _TRIAL_DAYS - elapsed)
+
+
 def _check_update_async(current_ver: str, callback):
-    """Só roda quando instalado (sem .git). Chama callback(nova_tag) se houver update."""
-    if os.path.exists(os.path.join(_SCRIPT_DIR, ".git")):
-        return  # modo dev — sem verificação
+    """Só roda quando instalado (sem .git) e auto_update ativo nas configurações."""
+    if _IS_DEV:
+        return
+    if not _get_settings().get("auto_update", True):
+        return
     def _worker():
         try:
             req = urllib.request.Request(
@@ -3016,6 +3067,7 @@ class App(tk.Tk):
         self.minsize(1100, 600)
         self.ra_sede_cal = None
         self._build_ui()
+        self._check_trial()
         _check_update_async(self._ver, lambda tag: self.after(0, lambda: self._show_update_banner(tag)))
 
     # ── helpers de versão / help ──────────────────────────────────────────────
@@ -3033,6 +3085,78 @@ class App(tk.Tk):
             bg="#0e2b0e", fg="#44ff88", relief="flat", cursor="hand2",
             command=banner.destroy
         ).pack(side="right")
+
+    def _check_trial(self):
+        days = _trial_days_left()
+        if days <= 0 and not _IS_DEV:
+            self.after(150, self._show_trial_expired_modal)
+        elif days <= 3 and not _IS_DEV:
+            self.after(300, lambda: self._show_trial_banner(days))
+
+    def _show_trial_banner(self, days: int):
+        banner = tk.Frame(self, bg="#2b1a00", padx=10, pady=5)
+        banner.pack(fill="x", before=self._nb)
+        tk.Label(
+            banner,
+            text=f"  ⏱ AVALIAÇÃO GRATUITA — {days} dia(s) restante(s)"
+                 f"  |  Licença: {_CONTATO}",
+            font=("Helvetica", 9), fg="#ffcc44", bg="#2b1a00"
+        ).pack(side="left")
+        tk.Button(banner, text=" ✕ ", font=("Helvetica", 9),
+                  bg="#2b1a00", fg="#ffcc44", relief="flat", cursor="hand2",
+                  command=banner.destroy).pack(side="right")
+
+    def _show_trial_expired_modal(self):
+        win = tk.Toplevel(self)
+        win.title("Período de avaliação encerrado")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.grab_set()
+        win.protocol("WM_DELETE_WINDOW", self.quit)
+        tk.Label(win, text="PERÍODO DE AVALIAÇÃO ENCERRADO",
+                 font=("Courier", 13, "bold"), fg=RED, bg=BG).pack(pady=(30, 8), padx=50)
+        tk.Label(win,
+                 text="Seu teste gratuito de 7 dias expirou.\n\n"
+                      "Para continuar usando o BCI - KNUCKLE SOFTWARE\n"
+                      "entre em contato para adquirir sua licença:",
+                 font=("Helvetica", 10), fg=FG, bg=BG, justify="center").pack(pady=8)
+        tk.Label(win, text=_CONTATO,
+                 font=("Courier", 18, "bold"), fg=ACCENT, bg=BG).pack(pady=12)
+        tk.Label(win, text="WhatsApp / Telefone",
+                 font=("Helvetica", 8), fg=FG_DIM, bg=BG).pack()
+        tk.Button(win, text="Fechar software", font=("Helvetica", 10, "bold"),
+                  bg=RED, fg="white", relief="flat", padx=24, pady=8,
+                  command=self.quit).pack(pady=24)
+        win.update_idletasks()
+        w = win.winfo_reqwidth(); h = win.winfo_reqheight()
+        sw = win.winfo_screenwidth(); sh = win.winfo_screenheight()
+        win.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
+
+    def _open_settings(self):
+        sett = _get_settings()
+        auto = sett.get("auto_update", True)
+        win = tk.Toplevel(self)
+        win.title("Configurações")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.grab_set()
+        tk.Label(win, text="CONFIGURAÇÕES",
+                 font=("Courier", 11, "bold"), fg=ACCENT, bg=BG).pack(pady=(20, 10), padx=30)
+        frm = tk.Frame(win, bg=BG2, padx=20, pady=15)
+        frm.pack(fill="x", padx=20, pady=4)
+        var = tk.BooleanVar(value=auto)
+        tk.Checkbutton(
+            frm, text="Verificar atualizações automaticamente ao iniciar",
+            variable=var, bg=BG2, fg=FG, activebackground=BG2,
+            activeforeground=FG, selectcolor=BG, font=("Helvetica", 9)
+        ).pack(anchor="w")
+        def _save():
+            sett["auto_update"] = var.get()
+            _save_settings(sett)
+            win.destroy()
+        tk.Button(win, text="Salvar", font=("Helvetica", 10, "bold"),
+                  bg=ACCENT, fg=BG, relief="flat", padx=20, pady=6,
+                  command=_save).pack(pady=(10, 20))
 
     def _open_help(self):
         candidates = [
@@ -3069,12 +3193,20 @@ class App(tk.Tk):
         right.pack(side="right", anchor="ne")
         tk.Label(right, text=self._ver,
                  font=("Courier", 9), fg=FG_DIM, bg=BG).pack(anchor="e")
+        btn_row = tk.Frame(right, bg=BG)
+        btn_row.pack(anchor="e", pady=(6, 0))
         tk.Button(
-            right, text=" ? ", font=("Courier", 10, "bold"),
+            btn_row, text=" ⚙ ", font=("Courier", 10),
+            bg=BG2, fg=FG_DIM, relief="flat", cursor="hand2",
+            activebackground=BG2, activeforeground=FG,
+            command=self._open_settings
+        ).pack(side="left", padx=(0, 4))
+        tk.Button(
+            btn_row, text=" ? ", font=("Courier", 10, "bold"),
             bg=BG2, fg=ACCENT, relief="flat", cursor="hand2",
             activebackground=BG2, activeforeground=ACCENT,
             command=self._open_help
-        ).pack(anchor="e", pady=(6, 0))
+        ).pack(side="left")
 
         tk.Frame(self, bg=ACCENT, height=2).pack(fill="x")
 
