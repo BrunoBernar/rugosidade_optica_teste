@@ -1,16 +1,162 @@
 """
-Estimador de Rugosidade por Imagem de Microscopio
+BCI - KNUCKLE SOFTWARE
+Author: Bruno Bernardinetti — https://github.com/BrunoBernar/rugosidade_optica_teste
+================================================================================
 
-Author: Bruno Bernardinetti - Github = https://github.com/BrunoBernar/rugosidade_optica_teste
-==================================================
-Fluxo de uso:
-  1. Carregue pelo menos 10 imagens da peca de REFERENCIA e informe seu Ra real (um)
-  2. Carregue pelo menos 10 imagens da peca a MEDIR
-  3. Clique em Analisar
-  4. Clique em Exportar PDF para salvar o relatorio completo
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                          FLUXO DE USO — MÓDULOS                            ║
+╚══════════════════════════════════════════════════════════════════════════════╝
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MÓDULO 1 — Análise de Rugosidade  (aba "Analise de Rugosidade")
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Objetivo: Estimar o Ra de uma peça a partir de imagens de microscópio,
+          usando uma peça de referência com Ra real conhecido.
+
+  1. Carregue as imagens da peça de REFERÊNCIA
+       • Clique em "Adicionar fotos" no slot REFERENCIA
+       • Selecione pelo menos 10 imagens (mesmo aumento e iluminação)
+  2. Informe o Ra real da referência
+       • Digite o valor em µm no campo "Ra real da referência"
+       • Ex: 0.8 / 1.6 / 3.2 / 6.3
+  3. Carregue as imagens da peça a MEDIR
+       • Clique em "Adicionar fotos" no slot PECA A MEDIR
+       • Mesmas condições de iluminação e magnificação da referência
+  4. Clique em "ANALISAR"
+       • O software calcula o fator de calibração (Ra_real / Ra_proxy)
+       • Aplica o fator às imagens da peça a medir
+       • Exibe Ra estimado ± desvio padrão e a classificação AFNOR/ISO
+  5. (Opcional) Clique em "Exportar PDF"
+       • Gera relatório completo com imagens, tabelas e resultado
+
+  Notas:
+    • Use Ctrl+clique para selecionar múltiplas fotos de uma vez
+    • Quanto mais fotos, mais preciso o resultado (mínimo 10 por peça)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MÓDULO 2 — Cálculo de Interferência  (aba "Calculo de Interferencia")
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Objetivo: Calcular pressão radial, tensões e forças de press-fit para
+          ajustes com interferência (Equações de Lamé — cilindros de parede
+          grossa), considerando condições secas e lubrificadas.
+
+  1. Preencha os dados do EIXO (Shaft)
+       • Young Ei [GPa], Poisson vi
+       • Diâmetro interno di [mm] (eixo vazado) e nominal d [mm]
+       • Desvios de tolerância superior e inferior [mm]
+  2. Preencha os dados do CUBO / KNUCKLE (Hub)
+       • Young Eo [GPa], Poisson vo
+       • Diâmetro externo do [mm] e nominal do furo [mm]
+       • Desvios de tolerância superior e inferior [mm]
+  3. Preencha a GEOMETRIA DA INTERFACE
+       • Largura nominal, mínima e máxima do contato [mm]
+  4. Preencha os COEFICIENTES DE ATRITO
+       • mu seco (ref. Stellantis: 0.40) e mu lubrificado (0.21)
+  5. Preencha a RUGOSIDADE DA SUPERFÍCIE
+       • Ra eixo e Ra cubo [µm] — usados para reduzir a interferência efetiva
+  6. Clique em ">> CALCULAR INTERFERENCIA"
+       • Resultados exibidos: diâmetros efetivos, interferência min/nom/max,
+         pressão radial, tensões de von Mises, forças de press-in e press-out
+         em condições secas e lubrificadas
+  7. (Opcional) Clique em "Exportar PDF" para salvar o relatório completo
+
+  Notas:
+    • Todos os campos têm valores padrão baseados no knuckle Stellantis
+    • A rugosidade reduz a interferência efetiva: d_eff = d_nom − (Ra_eixo + Ra_cubo)×1e−3
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MÓDULO 3 — Comparador de Curvas XML  (aba "Comparador de Curvas XML")
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Objetivo: Visualizar e comparar curvas Força × Curso de arquivos XML da
+          prensa maXYmos NC (Kistler / Sinpac), separando OK e NOK.
+
+  1. Clique em "➕ Adicionar XML(s)"
+       • Selecione um ou mais arquivos .xml exportados pela prensa
+       • A classificação OK/NOK é lida automaticamente do campo
+         <Total_result> do XML; se ausente, é inferida pelo nome do arquivo
+  2. (Opcional) Use os filtros "Ponto:" e "Ano:"
+       • Selecione um MP específico (ex: MP-006) para ver apenas aquele ponto
+       • Selecione um ano para filtrar por data no nome do arquivo
+       • "Todos" = sem filtro (exibe tudo)
+  3. (Opcional) Ajuste a classificação manualmente
+       • Selecione um arquivo na lista → clique "✔ OK" ou "✘ NOK"
+  4. (Opcional) Renomeie o label de exibição
+       • Selecione → "✏ Renomear label"
+  5. Defina a JANELA DE APROVAÇÃO (retângulo amarelo no gráfico)
+       • X min / X max: faixa de curso relevante [mm]
+       • Y min / Y max: limites de força [kN]
+  6. Clique em "📊 Plotar / Atualizar" ou em "↺ Aplicar Janela"
+       • Painel esquerdo do gráfico = curvas OK
+       • Painel direito do gráfico = curvas NOK
+  7. Use "Max curvas" e "Mostrar legenda" para controlar a visualização
+  8. (Opcional) Clique em "💾 Salvar gráfico" para exportar PNG/PDF/SVG
+
+  Notas:
+    • Arquivos já carregados não são duplicados
+    • O módulo serve de fonte para o Módulo 4 (botão "Importar OK do Comparador")
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MÓDULO 4 — Golden Curve Analyzer  (aba "Golden Curve")
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Objetivo: Gerar uma curva teórica de referência ("Golden Curve") a partir
+          de N curvas OK reais, e detectar anomalias em novas curvas.
+          Sub-abas: Golden Curve | Anomalia | Estatísticas
+
+  ── ETAPA 1: Carregar curvas de referência (OK) ────────────────────────────
+  1a. Clique em "➕ Adicionar XML / CSV"
+        • Selecione arquivos .xml ou .csv com curvas OK
+        • Arquivos classificados como NOK são automaticamente recusados
+  1b. OU clique em "⬆ Importar OK do Comparador"
+        • Importa diretamente as curvas OK já carregadas no Módulo 3
+  1c. (Opcional) Use os filtros "Ponto:" e "Ano:"
+        • Filtra quais curvas aparecem na lista e são usadas na análise
+        • Útil para gerar a Golden Curve de um MP específico ou período
+
+  ── ETAPA 2: Ajustar parâmetros ────────────────────────────────────────────
+  2a. Grau do polinômio (padrão 6) — ajuste polinomial sobre a curva média
+  2b. Sigma anomalia (padrão 3) — limiar de desvios-padrão para detecção
+  2c. Suavização gaussiana (padrão 2) — sigma do filtro sobre a curva média
+  2d. Pontos de interpolação (padrão 500) — resolução da grade X
+  2e. Marque/desmarque as visualizações: curvas individuais, banda de
+      confiança (P5–P95), ajuste polinomial, ajuste spline
+
+  ── ETAPA 3: Gerar a Golden Curve ──────────────────────────────────────────
+  3. Clique em "▶▶ GERAR GOLDEN CURVE"
+       • Exibe na sub-aba "Golden Curve":
+           – Curvas OK individuais (cinza)
+           – Banda de confiança P5–P95 (área sombreada)
+           – Curva média suavizada
+           – Ajuste polinomial / spline (opcional)
+       • Exibe na sub-aba "Estatísticas":
+           – Distribuição de força máxima por curva
+           – Distribuição de força mínima
+           – Desvio padrão ao longo do curso
+
+  ── ETAPA 4: Detectar anomalia em nova curva ───────────────────────────────
+  4a. Clique em "➕ Carregar curva(s) para teste"
+        • Selecione XML ou CSV da curva a avaliar (pode ser NOK)
+  4b. Clique em "🔍 Avaliar anomalia"
+        • A curva é interpolada na mesma grade X da Golden Curve
+        • Score de anomalia calculado (0–100): quanto mais alto, mais suspeito
+        • Veredito automático: OK (score < 40 e < 5% fora da banda)
+                               NOK (caso contrário)
+        • Sub-aba "Anomalia" exibe a curva sobreposta à banda de confiança,
+          destacando os pontos fora do limite em vermelho
+  4c. Clique em "🗑 Limpar teste" para remover as curvas de teste
+
+  ── Exportação ─────────────────────────────────────────────────────────────
+  5a. "💾 Exportar coeficientes CSV" — salva os coeficientes do polinômio
+  5b. "📄 Exportar PDF" — relatório completo com gráficos e estatísticas
+  5c. "🖼 Salvar gráfico PNG" — imagem do gráfico atual
+
+  Notas:
+    • Mínimo de 3 curvas OK para gerar a Golden Curve
+    • O filtro de Ponto/Ano afeta diretamente quais curvas entram na análise
+
+================================================================================
 Dependencias:
     pip install pillow numpy matplotlib scipy reportlab
+================================================================================
 """
 
 import tkinter as tk
@@ -22,7 +168,47 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from scipy.ndimage import sobel
-import os, io, datetime, math
+import os, io, datetime, math, re, subprocess, threading, urllib.request, json
+
+# ── Versão e update ───────────────────────────────────────────────────────────
+__version__  = "v1.0.0"          # atualizar a cada release/tag no git
+_SCRIPT_DIR  = os.path.dirname(os.path.abspath(__file__))
+_GH_API_LATEST = (
+    "https://api.github.com/repos/BrunoBernar/rugosidade_optica_teste/releases/latest"
+)
+
+def _get_app_version() -> str:
+    """Dev: lê `git describe --tags`. Instalado (sem .git): usa __version__."""
+    if os.path.exists(os.path.join(_SCRIPT_DIR, ".git")):
+        try:
+            r = subprocess.run(
+                ["git", "describe", "--tags", "--always", "--dirty"],
+                capture_output=True, text=True, cwd=_SCRIPT_DIR, timeout=3
+            )
+            if r.returncode == 0:
+                return r.stdout.strip()
+        except Exception:
+            pass
+    return __version__
+
+def _check_update_async(current_ver: str, callback):
+    """Só roda quando instalado (sem .git). Chama callback(nova_tag) se houver update."""
+    if os.path.exists(os.path.join(_SCRIPT_DIR, ".git")):
+        return  # modo dev — sem verificação
+    def _worker():
+        try:
+            req = urllib.request.Request(
+                _GH_API_LATEST, headers={"User-Agent": "BCI-KNUCKLE-SOFTWARE"}
+            )
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                data = json.loads(resp.read())
+            latest = data.get("tag_name", "").strip()
+            if latest and latest != current_ver:
+                callback(latest)
+        except Exception:
+            pass
+    threading.Thread(target=_worker, daemon=True).start()
+# ─────────────────────────────────────────────────────────────────────────────
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -1472,9 +1658,27 @@ def _xml_parse(filepath):
         ("program","Measuring_program_name"),
         ("block_x","Block_X"),("block_y","Block_Y")]}
     xs, ys = [], []
-    for pt in root.findall(".//Point"):
-        x_el = pt.find("X-ABSOLUTE-") or pt.find("X")
+    pts = (root.findall(".//Point") or
+           root.findall(".//POINT") or
+           root.findall(".//point") or
+           root.findall(".//Pt"))
+    for pt in pts:
+        x_el = pt.find("X-ABSOLUTE-")
+        if x_el is None: x_el = pt.find("X_-ABSOLUTE-")
+        if x_el is None: x_el = pt.find("X-Absolute")
+        if x_el is None: x_el = pt.find("X-absolute")
+        if x_el is None: x_el = pt.find("X")
+        if x_el is None:
+            for child in pt:
+                if child.tag.upper().startswith("X"):
+                    try:
+                        float((child.get("Value") or "").replace(",", "."))
+                        x_el = child
+                        break
+                    except (ValueError, AttributeError):
+                        pass
         y_el = pt.find("Y")
+        if y_el is None: y_el = pt.find("y")
         if x_el is not None and y_el is not None:
             try:
                 xs.append(float(x_el.get("Value").replace(",",".")))
@@ -1487,6 +1691,17 @@ def _xml_parse(filepath):
 
 
 def _xml_auto_classify(filepath):
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext == ".xml":
+        try:
+            tree = ET.parse(filepath)
+            el = tree.getroot().find(".//Total_result")
+            if el is not None:
+                val = el.get("Value", "").strip().upper()
+                if val in ("OK", "NOK"):
+                    return val
+        except Exception:
+            pass
     name = os.path.basename(filepath).upper()
     pos_ok  = name.rfind("_OK")
     pos_nok = name.rfind("_NOK")
@@ -1496,6 +1711,18 @@ def _xml_auto_classify(filepath):
     if pos_nok == -1: return "OK"
     if pos_ok  == -1: return "NOK"
     return "NOK" if pos_nok > pos_ok else "OK"
+
+
+def _extract_mp(filepath):
+    """Extrai código MP do nome do arquivo, ex: 'MP-006' de 'Part_ST030_MP-006_2022-...'"""
+    m = re.search(r'MP-\d+', os.path.basename(filepath), re.IGNORECASE)
+    return m.group(0).upper() if m else ""
+
+
+def _extract_year(filepath):
+    """Extrai ano de 4 dígitos do nome do arquivo, ex: '2022'."""
+    m = re.search(r'(20\d{2}|19\d{2})', os.path.basename(filepath))
+    return m.group(1) if m else ""
 
 
 class _CurveEntry:
@@ -1516,6 +1743,7 @@ class AbaXMLComparator(tk.Frame):
     def __init__(self, parent, **kw):
         super().__init__(parent, bg=BG, **kw)
         self.entries: list[_CurveEntry] = []
+        self._shown_entries: list[_CurveEntry] = []
         self._build()
 
     # ── UI ───────────────────────────────────────────────────────────────────
@@ -1534,6 +1762,29 @@ class AbaXMLComparator(tk.Frame):
         tk.Label(left, text="Knuckle Press-Fit  |  Stellantis",
                  bg=_C_PANEL, fg=_C_DIM,
                  font=("Segoe UI",8)).pack(pady=(0,8))
+
+        # ── Filtros MP / Ano ─────────────────────────────────────────────────
+        ff = tk.Frame(left, bg=_C_PANEL)
+        ff.pack(fill="x", padx=6, pady=(0, 2))
+        tk.Label(ff, text="Ponto:", bg=_C_PANEL, fg=_C_DIM,
+                 font=("Segoe UI", 8)).grid(row=0, column=0, sticky="w", pady=1)
+        self._filter_mp = tk.StringVar(value="Todos")
+        self._cb_mp = ttk.Combobox(ff, textvariable=self._filter_mp,
+                                   values=["Todos"], state="readonly",
+                                   font=("Segoe UI", 8), width=10)
+        self._cb_mp.grid(row=0, column=1, sticky="ew", padx=(4, 0), pady=1)
+        tk.Label(ff, text="Ano:", bg=_C_PANEL, fg=_C_DIM,
+                 font=("Segoe UI", 8)).grid(row=1, column=0, sticky="w", pady=1)
+        self._filter_year = tk.StringVar(value="Todos")
+        self._cb_year = ttk.Combobox(ff, textvariable=self._filter_year,
+                                     values=["Todos"], state="readonly",
+                                     font=("Segoe UI", 8), width=10)
+        self._cb_year.grid(row=1, column=1, sticky="ew", padx=(4, 0), pady=1)
+        ff.columnconfigure(1, weight=1)
+        self._cb_mp.bind("<<ComboboxSelected>>",
+                         lambda _: (self._refresh_list(), self._plot()))
+        self._cb_year.bind("<<ComboboxSelected>>",
+                           lambda _: (self._refresh_list(), self._plot()))
 
         lf = tk.Frame(left, bg=_C_PANEL)
         lf.pack(fill="both", expand=True, padx=6)
@@ -1668,16 +1919,38 @@ class AbaXMLComparator(tk.Frame):
             ax.set_xlabel("Curso [mm]",color="#cdd6f4",fontsize=10)
             ax.set_ylabel("Força [kN]",color="#cdd6f4",fontsize=10)
 
+    def _update_filter_options(self):
+        mps   = sorted(set(filter(None, (_extract_mp(e.filepath)   for e in self.entries))))
+        years = sorted(set(filter(None, (_extract_year(e.filepath) for e in self.entries))))
+        self._cb_mp["values"]   = ["Todos"] + mps
+        self._cb_year["values"] = ["Todos"] + years
+        if self._filter_mp.get() not in ["Todos"] + mps:
+            self._filter_mp.set("Todos")
+        if self._filter_year.get() not in ["Todos"] + years:
+            self._filter_year.set("Todos")
+
+    def _filtered_entries(self):
+        mp_f   = self._filter_mp.get()
+        year_f = self._filter_year.get()
+        return [e for e in self.entries
+                if (mp_f   == "Todos" or _extract_mp(e.filepath)   == mp_f)
+                and (year_f == "Todos" or _extract_year(e.filepath) == year_f)]
+
     def _refresh_list(self):
-        self._lb.delete(0,"end")
-        for e in self.entries:
+        self._update_filter_options()
+        self._shown_entries = self._filtered_entries()
+        self._lb.delete(0, "end")
+        for e in self._shown_entries:
             icon  = "✔" if e.classification == "OK" else "✘"
             color = _C_OK if e.classification == "OK" else _C_NOK
             self._lb.insert("end", f" {icon}  {e.label}")
             self._lb.itemconfig("end", fg=color)
-        n_ok  = sum(1 for e in self.entries if e.classification=="OK")
-        n_nok = sum(1 for e in self.entries if e.classification=="NOK")
-        self._status.set(f"{len(self.entries)} arquivo(s) — {n_ok} OK / {n_nok} NOK")
+        n_ok  = sum(1 for e in self._shown_entries if e.classification == "OK")
+        n_nok = sum(1 for e in self._shown_entries if e.classification == "NOK")
+        total = len(self.entries)
+        shown = len(self._shown_entries)
+        filt  = f" (de {total})" if shown != total else ""
+        self._status.set(f"{shown}{filt} arquivo(s) — {n_ok} OK / {n_nok} NOK")
 
     # ── ações ─────────────────────────────────────────────────────────────────
     def _add_files(self):
@@ -1700,7 +1973,8 @@ class AbaXMLComparator(tk.Frame):
     def _remove_selected(self):
         sel = self._lb.curselection()
         if not sel: return
-        self.entries.pop(sel[0])
+        entry = self._shown_entries[sel[0]]
+        self.entries.remove(entry)
         self._detail.set("")
         self._refresh_list(); self._plot()
 
@@ -1728,11 +2002,11 @@ class AbaXMLComparator(tk.Frame):
                  font=("Segoe UI",10)).pack(pady=(14,4))
         ent = tk.Entry(win,font=("Segoe UI",10),bg=_C_BTN,
                        fg="#cdd6f4",insertbackground="#cdd6f4",relief="flat")
-        ent.insert(0,self.entries[idx].label)
+        ent.insert(0,self._shown_entries[idx].label)
         ent.pack(padx=20,fill="x"); ent.focus()
         def apply(e=None):
             v = ent.get().strip()
-            if v: self.entries[idx].label = v
+            if v: self._shown_entries[idx].label = v
             self._refresh_list(); win.destroy()
         ent.bind("<Return>",apply)
         self._btn(win,"Confirmar",apply,color=_C_SEL,fg="#000").pack(pady=8)
@@ -1742,13 +2016,13 @@ class AbaXMLComparator(tk.Frame):
         if not sel:
             messagebox.showinfo("Classificar","Selecione um arquivo na lista primeiro.")
             return
-        self.entries[sel[0]].classification = cls
+        self._shown_entries[sel[0]].classification = cls
         self._refresh_list(); self._plot()
 
     def _on_select(self, _=None):
         sel = self._lb.curselection()
         if not sel: return
-        e = self.entries[sel[0]]; m = e.meta
+        e = self._shown_entries[sel[0]]; m = e.meta
         self._detail.set(
             f"Classe   : {e.classification}\n"
             f"Programa : {m.get('program','')}\n"
@@ -1759,8 +2033,9 @@ class AbaXMLComparator(tk.Frame):
             f"Força max: {max(e.y):.3f} kN")
 
     def _plot(self):
-        ok_list  = [e for e in self.entries if e.classification=="OK"]
-        nok_list = [e for e in self.entries if e.classification=="NOK"]
+        shown    = self._shown_entries if self._shown_entries else self._filtered_entries()
+        ok_list  = [e for e in shown if e.classification == "OK"]
+        nok_list = [e for e in shown if e.classification == "NOK"]
         for ax in self._axes: ax.cla()
         self._style_axes()
 
@@ -1787,7 +2062,7 @@ class AbaXMLComparator(tk.Frame):
         draw_group(self._axes[1], nok_list, _NOK_SH, "NOK", _C_NOK)
 
         import numpy as np
-        all_x = [x for e in self.entries for x in e.x]
+        all_x = [x for e in shown for x in e.x]
         if all_x:
             ticks = np.arange(int(min(all_x)//5)*5,
                               int(max(all_x)//5)*5+10, 5)
@@ -1833,27 +2108,975 @@ class AbaXMLComparator(tk.Frame):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Modulo 4 — Golden Curve Analyzer
+# ─────────────────────────────────────────────────────────────────────────────
+
+import csv, xml.etree.ElementTree as ET
+from scipy.interpolate import interp1d
+from scipy.ndimage import gaussian_filter1d
+
+try:
+    from reportlab.platypus import HRFlowable
+    _HAS_REPORTLAB = True
+except ImportError:
+    _HAS_REPORTLAB = False
+
+N_INTERP = 500
+POLY_MAX  = 12
+
+_C_OK    = "#2ecc71"
+_C_NOK   = "#e74c3c"
+_C_PANEL = "#1a2230"
+_C_BTN   = "#1e2d3d"
+_C_SEL   = "#00e5ff"
+_C_DIM   = "#3a6070"
+
+
+def _parse_xml(filepath):
+    """Extrai vetores X, Y de arquivo XML de prensa (Kistler/Sinpac)."""
+    tree = ET.parse(filepath)
+    root = tree.getroot()
+    xs, ys = [], []
+    for pt in root.findall(".//Point"):
+        x_el = pt.find("X-ABSOLUTE-")
+        if x_el is None: x_el = pt.find("X_-ABSOLUTE-")
+        if x_el is None: x_el = pt.find("X-Absolute")
+        if x_el is None: x_el = pt.find("X")
+        if x_el is None:
+            for child in pt:
+                if child.tag.upper().startswith("X") and child.get("Value") is not None:
+                    try:
+                        float(child.get("Value").replace(",", "."))
+                        x_el = child
+                        break
+                    except (ValueError, AttributeError):
+                        pass
+        y_el = pt.find("Y")
+        if y_el is None: y_el = pt.find("y")
+        if x_el is not None and y_el is not None:
+            try:
+                xs.append(float(x_el.get("Value", "").replace(",", ".")))
+                ys.append(float(y_el.get("Value", "").replace(",", ".")))
+            except (ValueError, AttributeError):
+                pass
+    if not xs:
+        raise ValueError(f"Nenhum ponto valido em {os.path.basename(filepath)}")
+    return np.array(xs), np.array(ys)
+
+
+def _parse_csv(filepath):
+    """
+    Extrai X, Y de CSV. Aceita virgula, ponto-e-virgula ou tabulacao
+    como separador, e ponto ou virgula como decimal.
+    """
+    xs, ys = [], []
+    with open(filepath, newline="", encoding="utf-8-sig") as f:
+        raw = f.read(4096)
+    sep = ","
+    for s in [";", "\t", ","]:
+        if raw.count(s) > raw.count(sep):
+            sep = s
+    with open(filepath, newline="", encoding="utf-8-sig") as f:
+        reader = csv.reader(f, delimiter=sep)
+        for row in reader:
+            if len(row) < 2:
+                continue
+            try:
+                x_str = row[0].strip().replace(",", ".") if sep != "," else row[0].strip()
+                y_str = row[1].strip().replace(",", ".") if sep != "," else row[1].strip()
+                xs.append(float(x_str))
+                ys.append(float(y_str))
+            except ValueError:
+                continue
+    if len(xs) < 2:
+        raise ValueError(f"Menos de 2 pontos validos em {os.path.basename(filepath)}")
+    return np.array(xs), np.array(ys)
+
+
+def parse_curve_file(filepath):
+    """Dispatcher: escolhe parser pelo tipo de arquivo."""
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext == ".xml":
+        return _parse_xml(filepath)
+    elif ext == ".csv":
+        return _parse_csv(filepath)
+    else:
+        raise ValueError(f"Formato nao suportado: {ext}")
+
+
+class GoldenCurveAnalyzer:
+    """
+    Recebe lista de pares (x_arr, y_arr) de curvas OK e calcula:
+    curva media, banda de confianca, ajuste polinomial/spline e score de anomalia.
+    """
+
+    def __init__(self, curves: list[tuple[np.ndarray, np.ndarray]],
+                 n_interp: int = N_INTERP,
+                 smooth_sigma: float = 2.0):
+        if len(curves) < 3:
+            raise ValueError("Minimo de 3 curvas para analise.")
+        self.n_curves  = len(curves)
+        self.n_interp  = n_interp
+        self.smooth    = smooth_sigma
+        self._raw      = curves
+        self._compute()
+
+    def _compute(self):
+        x_min = max(c[0].min() for c in self._raw)
+        x_max = min(c[0].max() for c in self._raw)
+        if x_min >= x_max:
+            raise ValueError(
+                "As curvas nao se sobrepoem no eixo X. "
+                "Verifique se todas as curvas cobrem a mesma faixa de curso.")
+        self.x_grid = np.linspace(x_min, x_max, self.n_interp)
+        mat = []
+        for x, y in self._raw:
+            idx  = np.argsort(x)
+            xu, ui = np.unique(x[idx], return_index=True)
+            yu = y[idx][ui]
+            if len(xu) < 2:
+                continue
+            f = interp1d(xu, yu, kind="linear",
+                         bounds_error=False, fill_value="extrapolate")
+            mat.append(f(self.x_grid))
+        self.matrix   = np.array(mat)
+        self.n_valid  = len(mat)
+        self.mean     = np.mean(self.matrix, axis=0)
+        self.median   = np.median(self.matrix, axis=0)
+        self.std      = np.std(self.matrix, axis=0)
+        self.p05      = np.percentile(self.matrix,  5, axis=0)
+        self.p95      = np.percentile(self.matrix, 95, axis=0)
+        self.p25      = np.percentile(self.matrix, 25, axis=0)
+        self.p75      = np.percentile(self.matrix, 75, axis=0)
+        self.mean_smooth = (gaussian_filter1d(self.mean, sigma=self.smooth)
+                            if self.smooth > 0 else self.mean.copy())
+        self.f_max_per_curve = self.matrix.max(axis=1)
+        self.f_min_per_curve = self.matrix.min(axis=1)
+
+    def fit_polynomial(self, degree: int = 6) -> dict:
+        degree = max(1, min(degree, POLY_MAX))
+        coeffs = np.polyfit(self.x_grid, self.mean_smooth, degree)
+        poly   = np.poly1d(coeffs)
+        y_fit  = poly(self.x_grid)
+        resid  = self.mean_smooth - y_fit
+        r2     = 1.0 - np.var(resid) / np.var(self.mean_smooth)
+        return dict(coeffs=coeffs, poly=poly, y_fit=y_fit, r2=r2, degree=degree)
+
+    def fit_spline(self, smoothing: float | None = None) -> dict:
+        from scipy.interpolate import UnivariateSpline
+        s = smoothing if smoothing is not None else len(self.x_grid) * 0.5
+        spl   = UnivariateSpline(self.x_grid, self.mean_smooth, s=s, k=3)
+        y_fit = spl(self.x_grid)
+        resid = self.mean_smooth - y_fit
+        r2    = 1.0 - np.var(resid) / np.var(self.mean_smooth)
+        return dict(spl=spl, y_fit=y_fit, r2=r2)
+
+    def anomaly_score(self, x_new: np.ndarray, y_new: np.ndarray,
+                      sigma_thr: float = 3.0) -> dict:
+        idx  = np.argsort(x_new)
+        xu, ui = np.unique(x_new[idx], return_index=True)
+        yu = y_new[idx][ui]
+        mask = (self.x_grid >= xu.min()) & (self.x_grid <= xu.max())
+        if mask.sum() < 10:
+            return dict(score=None, outside_frac=None, msg="Fora da faixa de X")
+        f   = interp1d(xu, yu, kind="linear",
+                       bounds_error=False, fill_value="extrapolate")
+        y_i = f(self.x_grid[mask])
+        mu  = self.mean[mask]; sg = self.std[mask]
+        sg  = np.where(sg < 1e-9, 1e-9, sg)
+        z   = np.abs(y_i - mu) / sg
+        outside = (z > sigma_thr).mean()
+        score   = float(np.clip(z.mean() / sigma_thr * 50, 0, 100))
+        verdict = "OK" if outside < 0.05 and score < 40 else "NOK"
+        return dict(score=score, outside_frac=outside,
+                    verdict=verdict, z=z, mask=mask)
+
+
+class AbaGoldenCurve(tk.Frame):
+    """
+    Aba 4 — Golden Curve Analyzer.
+    Adicione ao notebook: nb.add(AbaGoldenCurve(nb), text="  Golden Curve  ")
+    """
+
+    def __init__(self, parent, app_ref=None, **kw):
+        super().__init__(parent, bg=BG, **kw)
+        self._app     = app_ref
+        self._files:  list[str]  = []
+        self._curves: list       = []
+        self._analyzer: GoldenCurveAnalyzer | None = None
+        self._poly_result: dict  | None = None
+        self._spl_result:  dict  | None = None
+        self._test_curves: list  = []
+        self._build()
+
+    def _btn(self, parent, text, cmd, fg=ACCENT, bg=BG2):
+        return tk.Button(parent, text=text, command=cmd,
+                         bg=bg, fg=fg, font=FONT_MONO, relief="flat",
+                         padx=10, pady=5, cursor="hand2",
+                         activebackground=BG, activeforeground=fg)
+
+    def _build(self):
+        root_frame = tk.Frame(self, bg=BG)
+        root_frame.pack(fill="both", expand=True)
+
+        # ── painel esquerdo ───────────────────────────────────────────────
+        left = tk.Frame(root_frame, bg=_C_PANEL, width=310)
+        left.pack(side="left", fill="y", padx=(8, 0), pady=8)
+        left.pack_propagate(False)
+
+        tk.Label(left, text="GOLDEN CURVE ANALYZER",
+                 bg=_C_PANEL, fg=ACCENT, font=("Courier", 10, "bold"),
+                 pady=10).pack()
+        tk.Label(left, text="Curva teorica a partir de N curvas OK reais",
+                 bg=_C_PANEL, fg=FG_DIM, font=("Helvetica", 8)).pack(pady=(0, 8))
+        tk.Frame(left, bg=BORDER, height=1).pack(fill="x", padx=8)
+
+        tk.Label(left, text="1. CURVAS DE REFERENCIA (OK)",
+                 bg=_C_PANEL, fg=GOLD, font=FONT_SMALL, pady=8).pack(anchor="w", padx=10)
+        self._btn(left, "➕  Adicionar XML / CSV",
+                  self._add_ok_files, fg=GOLD).pack(fill="x", padx=8, pady=2)
+        self._btn(left, "⬆  Importar OK do Comparador",
+                  self._add_from_comparator, fg=ACCENT).pack(fill="x", padx=8, pady=2)
+        self._btn(left, "🗑  Limpar curvas OK",
+                  self._clear_ok, fg=FG_DIM).pack(fill="x", padx=8, pady=2)
+        self._lbl_n = tk.Label(left, text="0 curvas carregadas",
+                               bg=_C_PANEL, fg=FG_DIM, font=FONT_SMALL)
+        self._lbl_n.pack(anchor="w", padx=12, pady=(2, 4))
+
+        # ── Filtros MP / Ano ─────────────────────────────────────────────────
+        gf = tk.Frame(left, bg=_C_PANEL)
+        gf.pack(fill="x", padx=8, pady=(0, 2))
+        tk.Label(gf, text="Ponto:", bg=_C_PANEL, fg=FG_DIM,
+                 font=FONT_SMALL).grid(row=0, column=0, sticky="w", pady=1)
+        self._gc_filter_mp = tk.StringVar(value="Todos")
+        self._gc_cb_mp = ttk.Combobox(gf, textvariable=self._gc_filter_mp,
+                                      values=["Todos"], state="readonly",
+                                      font=FONT_SMALL, width=10)
+        self._gc_cb_mp.grid(row=0, column=1, sticky="ew", padx=(4, 0), pady=1)
+        tk.Label(gf, text="Ano:", bg=_C_PANEL, fg=FG_DIM,
+                 font=FONT_SMALL).grid(row=1, column=0, sticky="w", pady=1)
+        self._gc_filter_year = tk.StringVar(value="Todos")
+        self._gc_cb_year = ttk.Combobox(gf, textvariable=self._gc_filter_year,
+                                        values=["Todos"], state="readonly",
+                                        font=FONT_SMALL, width=10)
+        self._gc_cb_year.grid(row=1, column=1, sticky="ew", padx=(4, 0), pady=1)
+        gf.columnconfigure(1, weight=1)
+        self._gc_cb_mp.bind("<<ComboboxSelected>>",   lambda _: self._refresh_list())
+        self._gc_cb_year.bind("<<ComboboxSelected>>", lambda _: self._refresh_list())
+
+        lb_f = tk.Frame(left, bg=_C_PANEL)
+        lb_f.pack(fill="x", padx=8, pady=(0, 4))
+        self._lb = tk.Listbox(lb_f, bg=BG3, fg=FG, font=("Courier", 7),
+                              height=7, relief="flat", bd=0,
+                              selectbackground=ACCENT, selectforeground=BG,
+                              activestyle="none", exportselection=False)
+        self._lb.pack(side="left", fill="x", expand=True)
+        sb2 = ttk.Scrollbar(lb_f, orient="vertical", command=self._lb.yview)
+        sb2.pack(side="right", fill="y")
+        self._lb.config(yscrollcommand=sb2.set)
+
+        tk.Frame(left, bg=BORDER, height=1).pack(fill="x", padx=8, pady=4)
+
+        tk.Label(left, text="2. PARAMETROS DA ANALISE",
+                 bg=_C_PANEL, fg=PURPLE, font=FONT_SMALL, pady=6).pack(anchor="w", padx=10)
+
+        pg = tk.Frame(left, bg=_C_PANEL)
+        pg.pack(fill="x", padx=10, pady=(0, 4))
+
+        def prow(parent, label, default, width=6):
+            r = tk.Frame(parent, bg=_C_PANEL); r.pack(fill="x", pady=2)
+            tk.Label(r, text=label, bg=_C_PANEL, fg=FG_DIM, font=FONT_SMALL,
+                     width=22, anchor="w").pack(side="left")
+            v = tk.StringVar(value=str(default))
+            tk.Entry(r, textvariable=v, bg=BG3, fg=ACCENT,
+                     font=("Courier", 9, "bold"), insertbackground=ACCENT,
+                     relief="flat", highlightthickness=1,
+                     highlightbackground=BORDER, width=width).pack(side="left", ipady=2)
+            return v
+
+        self._v_npoly  = prow(pg, "Grau do polinomio",    6)
+        self._v_sigma  = prow(pg, "Sigma anomalia (thr)", 3)
+        self._v_smooth = prow(pg, "Suavizacao gaussiana", 2)
+        self._v_npts   = prow(pg, "Pontos interpolacao",  500)
+
+        ck = tk.Frame(left, bg=_C_PANEL); ck.pack(fill="x", padx=10, pady=4)
+        self._show_raw  = tk.BooleanVar(value=True)
+        self._show_band = tk.BooleanVar(value=True)
+        self._show_poly = tk.BooleanVar(value=True)
+        self._show_spl  = tk.BooleanVar(value=False)
+        for var, label in [(self._show_raw,  "Mostrar curvas individuais"),
+                           (self._show_band, "Banda de confianca"),
+                           (self._show_poly, "Ajuste polinomial"),
+                           (self._show_spl,  "Ajuste spline")]:
+            tk.Checkbutton(ck, text=label, variable=var,
+                           bg=_C_PANEL, fg=FG_DIM, selectcolor=BG3,
+                           activebackground=_C_PANEL, activeforeground=ACCENT,
+                           font=FONT_SMALL, command=self._replot
+                           ).pack(anchor="w", pady=1)
+
+        tk.Frame(left, bg=BORDER, height=1).pack(fill="x", padx=8, pady=4)
+        self._btn(left, "▶▶  GERAR GOLDEN CURVE",
+                  self._analisar, fg=ACCENT, bg="#0a2030").pack(fill="x", padx=8, pady=(0, 4))
+        tk.Frame(left, bg=BORDER, height=1).pack(fill="x", padx=8, pady=4)
+
+        tk.Label(left, text="3. DETECCAO DE ANOMALIA",
+                 bg=_C_PANEL, fg=RED, font=FONT_SMALL, pady=6).pack(anchor="w", padx=10)
+        self._btn(left, "➕  Carregar curva(s) para teste",
+                  self._add_test_curves, fg=RED).pack(fill="x", padx=8, pady=2)
+        self._lbl_test = tk.Label(left, text="0 curvas de teste",
+                                  bg=_C_PANEL, fg=FG_DIM, font=FONT_SMALL)
+        self._lbl_test.pack(anchor="w", padx=12)
+        self._btn(left, "🔍  Avaliar anomalia",
+                  self._avaliar_anomalia, fg=ORANGE).pack(fill="x", padx=8, pady=(4, 2))
+        self._btn(left, "🗑  Limpar teste",
+                  self._clear_test, fg=FG_DIM).pack(fill="x", padx=8, pady=2)
+        tk.Frame(left, bg=BORDER, height=1).pack(fill="x", padx=8, pady=4)
+
+        self._btn(left, "💾  Exportar coeficientes CSV",
+                  self._export_coeffs, fg=GREEN).pack(fill="x", padx=8, pady=2)
+        self._btn(left, "📄  Exportar PDF",
+                  self._export_pdf, fg=PURPLE).pack(fill="x", padx=8, pady=2)
+        self._btn(left, "🖼  Salvar grafico PNG",
+                  self._save_png, fg=FG_DIM).pack(fill="x", padx=8, pady=2)
+
+        self._status = tk.StringVar(value="Aguardando curvas...")
+        tk.Label(left, textvariable=self._status, bg=_C_PANEL, fg=FG_DIM,
+                 font=FONT_SMALL, wraplength=290, justify="left",
+                 pady=6).pack(padx=8, fill="x")
+
+        # ── painel direito — graficos ─────────────────────────────────────
+        right = tk.Frame(root_frame, bg=BG)
+        right.pack(side="left", fill="both", expand=True, padx=8, pady=8)
+
+        nb_style = ttk.Style()
+        nb_style.configure("Inner.TNotebook", background=BG, borderwidth=0)
+        nb_style.configure("Inner.TNotebook.Tab", background=BG2, foreground=FG_DIM,
+                           font=FONT_SMALL, padding=[12, 5])
+        nb_style.map("Inner.TNotebook.Tab",
+                     background=[("selected", BG)],
+                     foreground=[("selected", ACCENT)])
+
+        self._nb_inner = ttk.Notebook(right, style="Inner.TNotebook")
+        self._nb_inner.pack(fill="both", expand=True)
+
+        tab_gc = tk.Frame(self._nb_inner, bg=BG)
+        self._nb_inner.add(tab_gc, text="  Golden Curve  ")
+        self._fig, self._ax = plt.subplots(figsize=(11, 5.5), facecolor=BG)
+        self._style_ax(self._ax, "Golden Curve  —  F(x) media + banda de confianca")
+        self._cv_gc = FigureCanvasTkAgg(self._fig, master=tab_gc)
+        self._cv_gc.get_tk_widget().pack(fill="both", expand=True)
+        NavigationToolbar2Tk(self._cv_gc, tab_gc).update()
+
+        tab_an = tk.Frame(self._nb_inner, bg=BG)
+        self._nb_inner.add(tab_an, text="  Anomalia  ")
+        self._fig_an, self._ax_an = plt.subplots(figsize=(11, 5.5), facecolor=BG)
+        self._style_ax(self._ax_an, "Deteccao de Anomalia  —  Curva nova vs Golden Curve")
+        self._cv_an = FigureCanvasTkAgg(self._fig_an, master=tab_an)
+        self._cv_an.get_tk_widget().pack(fill="both", expand=True)
+        NavigationToolbar2Tk(self._cv_an, tab_an).update()
+
+        tab_st = tk.Frame(self._nb_inner, bg=BG)
+        self._nb_inner.add(tab_st, text="  Estatisticas  ")
+        self._fig_st, self._axes_st = plt.subplots(1, 3, figsize=(13, 4.5), facecolor=BG)
+        self._fig_st.tight_layout(pad=2.5)
+        for ax in self._axes_st:
+            self._style_ax(ax, "")
+        self._cv_st = FigureCanvasTkAgg(self._fig_st, master=tab_st)
+        self._cv_st.get_tk_widget().pack(fill="both", expand=True)
+        NavigationToolbar2Tk(self._cv_st, tab_st).update()
+
+        self._placeholder_all()
+
+    def _style_ax(self, ax, title=""):
+        ax.set_facecolor(BG3)
+        for sp in ax.spines.values():
+            sp.set_edgecolor(BORDER)
+        ax.tick_params(colors=FG_DIM, labelsize=8)
+        if title:
+            ax.set_title(title, color=FG_DIM, fontsize=9, pad=6)
+
+    def _placeholder_all(self):
+        for ax, cv in [(self._ax, self._cv_gc), (self._ax_an, self._cv_an)]:
+            ax.cla(); self._style_ax(ax)
+            ax.text(0.5, 0.5,
+                    "Carregue curvas OK e clique em  ▶▶  GERAR GOLDEN CURVE",
+                    transform=ax.transAxes,
+                    ha="center", va="center", color="#2a3a44", fontsize=10)
+            cv.draw()
+        for ax in self._axes_st:
+            ax.cla(); self._style_ax(ax)
+            ax.text(0.5, 0.5, "sem dados", transform=ax.transAxes,
+                    ha="center", va="center", color="#2a3a44", fontsize=9)
+        self._cv_st.draw()
+
+    def _add_ok_files(self):
+        paths = filedialog.askopenfilenames(
+            title="Selecionar curvas OK (XML ou CSV)",
+            filetypes=[("Suportados", "*.xml *.csv"), ("XML Prensa", "*.xml"),
+                       ("CSV", "*.csv"), ("Todos", "*.*")])
+        if not paths:
+            return
+        errs, added, rejected_nok = [], 0, []
+        for p in paths:
+            if p in self._files:
+                continue
+            if _xml_auto_classify(p) == "NOK":
+                rejected_nok.append(os.path.basename(p))
+                continue
+            try:
+                x, y = parse_curve_file(p)
+                self._files.append(p)
+                self._curves.append((x, y))
+                added += 1
+            except Exception as e:
+                errs.append(f"{os.path.basename(p)}: {e}")
+        self._refresh_list()
+        if rejected_nok:
+            messagebox.showwarning(
+                "Importacoes NOK recusadas",
+                f"{len(rejected_nok)} arquivo(s) recusado(s) por classificacao NOK:\n" +
+                "\n".join(rejected_nok[:15]) +
+                (f"\n... +{len(rejected_nok)-15} outros" if len(rejected_nok) > 15 else ""))
+        if errs:
+            messagebox.showwarning("Avisos de importacao",
+                                   "\n".join(errs[:10]) +
+                                   (f"\n... +{len(errs)-10} erros" if len(errs) > 10 else ""))
+        self._status.set(f"+{added} curvas adicionadas.  Total: {len(self._curves)}")
+
+    def _clear_ok(self):
+        self._files.clear(); self._curves.clear()
+        self._analyzer = None; self._poly_result = None; self._spl_result = None
+        self._lb.delete(0, "end")
+        self._lbl_n.config(text="0 curvas carregadas")
+        self._status.set("Curvas OK removidas.")
+        self._placeholder_all()
+
+    def _add_from_comparator(self):
+        if self._app is None or not hasattr(self._app, "_aba_xml"):
+            messagebox.showwarning("Atencao",
+                "Modulo de Comparacao nao disponivel."); return
+        ok_entries = [e for e in self._app._aba_xml.entries
+                      if e.classification == "OK"]
+        if not ok_entries:
+            messagebox.showinfo("Importar do Comparador",
+                "Nenhuma curva OK carregada no Comparador de Curvas XML."); return
+        added = skipped = 0
+        for e in ok_entries:
+            if e.filepath in self._files:
+                skipped += 1
+                continue
+            self._files.append(e.filepath)
+            self._curves.append((np.array(e.x), np.array(e.y)))
+            added += 1
+        self._refresh_list()
+        msg = f"+{added} curva(s) OK importada(s) do Comparador.  Total: {len(self._curves)}"
+        if skipped:
+            msg += f"  ({skipped} ja existiam)"
+        self._status.set(msg)
+
+    def _add_test_curves(self):
+        paths = filedialog.askopenfilenames(
+            title="Curvas para teste de anomalia (XML ou CSV)",
+            filetypes=[("Suportados", "*.xml *.csv"), ("Todos", "*.*")])
+        if not paths:
+            return
+        errs, added = [], 0
+        for p in paths:
+            try:
+                x, y = parse_curve_file(p)
+                self._test_curves.append((x, y, os.path.basename(p)))
+                added += 1
+            except Exception as e:
+                errs.append(f"{os.path.basename(p)}: {e}")
+        self._lbl_test.config(text=f"{len(self._test_curves)} curvas de teste")
+        if errs:
+            messagebox.showwarning("Avisos", "\n".join(errs[:5]))
+
+    def _clear_test(self):
+        self._test_curves.clear()
+        self._lbl_test.config(text="0 curvas de teste")
+        self._ax_an.cla(); self._style_ax(self._ax_an)
+        self._ax_an.text(0.5, 0.5, "sem dados de teste",
+                         transform=self._ax_an.transAxes,
+                         ha="center", va="center", color="#2a3a44", fontsize=9)
+        self._cv_an.draw()
+
+    def _gc_update_filter_options(self):
+        mps   = sorted(set(filter(None, (_extract_mp(p)   for p in self._files))))
+        years = sorted(set(filter(None, (_extract_year(p) for p in self._files))))
+        self._gc_cb_mp["values"]   = ["Todos"] + mps
+        self._gc_cb_year["values"] = ["Todos"] + years
+        if self._gc_filter_mp.get() not in ["Todos"] + mps:
+            self._gc_filter_mp.set("Todos")
+        if self._gc_filter_year.get() not in ["Todos"] + years:
+            self._gc_filter_year.set("Todos")
+
+    def _gc_filtered_indices(self):
+        mp_f   = self._gc_filter_mp.get()
+        year_f = self._gc_filter_year.get()
+        return [i for i, p in enumerate(self._files)
+                if (mp_f   == "Todos" or _extract_mp(p)   == mp_f)
+                and (year_f == "Todos" or _extract_year(p) == year_f)]
+
+    def _refresh_list(self):
+        self._gc_update_filter_options()
+        idxs = self._gc_filtered_indices()
+        self._lb.delete(0, "end")
+        for i in idxs:
+            p = self._files[i]
+            ext = os.path.splitext(p)[1].upper()
+            self._lb.insert("end", f" [{ext}]  {os.path.basename(p)}")
+        total = len(self._files)
+        shown = len(idxs)
+        filt  = f" (de {total})" if shown != total else ""
+        self._lbl_n.config(text=f"{shown}{filt} curvas carregadas")
+
+    def _get_params(self):
+        def _f(v, default):
+            try:    return float(v.get().replace(",", "."))
+            except: return default
+        return {
+            "degree":   int(_f(self._v_npoly,  6)),
+            "sigma":    _f(self._v_sigma,  3.0),
+            "smooth":   _f(self._v_smooth, 2.0),
+            "n_interp": int(_f(self._v_npts, 500)),
+        }
+
+    def _analisar(self):
+        idxs = self._gc_filtered_indices()
+        curves_to_use = [self._curves[i] for i in idxs]
+        if len(curves_to_use) < 3:
+            messagebox.showwarning("Atencao",
+                "Carregue pelo menos 3 curvas OK (visíveis no filtro atual) para gerar a Golden Curve."); return
+        p = self._get_params()
+        self._status.set("Processando..."); self.update()
+        try:
+            self._analyzer = GoldenCurveAnalyzer(
+                curves_to_use, n_interp=p["n_interp"], smooth_sigma=p["smooth"])
+            self._poly_result = self._analyzer.fit_polynomial(degree=p["degree"])
+            self._spl_result  = self._analyzer.fit_spline()
+            self._replot()
+            self._plot_stats()
+            az = self._analyzer
+            self._status.set(
+                f"OK  |  {az.n_valid} curvas  |  "
+                f"X: [{az.x_grid[0]:.1f}, {az.x_grid[-1]:.1f}] mm  |  "
+                f"F_media_max: {az.mean.max():.3f} kN  |  "
+                f"R2_poly: {self._poly_result['r2']:.4f}")
+        except Exception as e:
+            messagebox.showerror("Erro", str(e))
+            self._status.set(f"Erro: {e}")
+
+    def _replot(self):
+        if self._analyzer is None:
+            return
+        az = self._analyzer; p = self._get_params()
+        ax = self._ax; ax.cla(); self._style_ax(ax)
+        x  = az.x_grid
+
+        if self._show_raw.get():
+            n_show  = min(az.n_valid, 200)
+            palette = plt.cm.Blues(np.linspace(0.25, 0.6, n_show))
+            step    = max(1, az.n_valid // n_show)
+            for i, row in enumerate(az.matrix[::step][:n_show]):
+                ax.plot(x, row, color=palette[i % n_show], lw=0.5, alpha=0.35)
+
+        if self._show_band.get():
+            ax.fill_between(x, az.p05, az.p95, color=ACCENT, alpha=0.10, label="P5–P95")
+            ax.fill_between(x, az.p25, az.p75, color=ACCENT, alpha=0.18, label="IQR (P25–P75)")
+            ax.fill_between(x, az.mean - az.std, az.mean + az.std,
+                            color=GOLD, alpha=0.18, label="mean ± 1σ")
+
+        ax.plot(x, az.mean_smooth, color=GOLD, lw=2.5, zorder=20,
+                label=f"Media suavizada (n={az.n_valid})")
+
+        if self._show_poly.get() and self._poly_result:
+            pr = self._poly_result
+            ax.plot(x, pr["y_fit"], color=PURPLE, lw=1.8, ls="--", zorder=18,
+                    label=f"Polinomio grau {pr['degree']}  R²={pr['r2']:.4f}")
+
+        if self._show_spl.get() and self._spl_result:
+            sr = self._spl_result
+            ax.plot(x, sr["y_fit"], color=GREEN, lw=1.8, ls=":", zorder=17,
+                    label=f"Spline cubico  R²={sr['r2']:.4f}")
+
+        ax.set_xlabel("Curso [mm]", color=FG_DIM, fontsize=9)
+        ax.set_ylabel("Forca [kN]", color=FG_DIM, fontsize=9)
+        ax.set_title(
+            f"Golden Curve  |  n={az.n_valid} curvas OK  |  "
+            f"F_max_medio={az.mean.max():.3f} kN  |  σ_max={az.std.max():.3f} kN",
+            color=FG_DIM, fontsize=9, pad=6)
+        ax.legend(fontsize=8, facecolor=BG2, edgecolor=BORDER,
+                  labelcolor=FG, loc="upper left")
+        ax.grid(True, ls="--", alpha=0.2, color=FG_DIM, lw=0.5)
+        self._fig.tight_layout(pad=1.8)
+        self._cv_gc.draw()
+
+    def _plot_stats(self):
+        if self._analyzer is None:
+            return
+        az = self._analyzer
+        for ax in self._axes_st:
+            ax.cla(); self._style_ax(ax)
+
+        ax0 = self._axes_st[0]
+        ax0.hist(az.f_max_per_curve, bins=min(30, az.n_valid),
+                 color=GOLD, alpha=0.8, edgecolor=BG3, lw=0.5)
+        ax0.axvline(az.f_max_per_curve.mean(), color=ACCENT, lw=1.5, ls="--",
+                    label=f"media={az.f_max_per_curve.mean():.3f}")
+        ax0.set_title("Distribuicao de F_max", color=FG_DIM, fontsize=8, pad=4)
+        ax0.set_xlabel("F_max [kN]", color=FG_DIM, fontsize=7)
+        ax0.legend(fontsize=7, facecolor=BG2, edgecolor=BORDER, labelcolor=FG)
+
+        ax1 = self._axes_st[1]
+        ax1.plot(az.x_grid, az.std, color=ORANGE, lw=1.5)
+        ax1.fill_between(az.x_grid, 0, az.std, color=ORANGE, alpha=0.25)
+        ax1.set_title("Desvio padrao F(x)", color=FG_DIM, fontsize=8, pad=4)
+        ax1.set_xlabel("Curso [mm]", color=FG_DIM, fontsize=7)
+        ax1.set_ylabel("σ [kN]", color=FG_DIM, fontsize=7)
+
+        ax2 = self._axes_st[2]
+        if self._poly_result:
+            resid = az.mean_smooth - self._poly_result["y_fit"]
+            ax2.plot(az.x_grid, resid, color=PURPLE, lw=1.2)
+            ax2.axhline(0, color=FG_DIM, lw=0.8, ls="--", alpha=0.5)
+            ax2.fill_between(az.x_grid, resid, 0, color=PURPLE, alpha=0.2)
+            ax2.set_title(
+                f"Residuos do polinomio  R²={self._poly_result['r2']:.5f}",
+                color=FG_DIM, fontsize=8, pad=4)
+            ax2.set_xlabel("Curso [mm]", color=FG_DIM, fontsize=7)
+            ax2.set_ylabel("Residuo [kN]", color=FG_DIM, fontsize=7)
+
+        for ax in self._axes_st:
+            ax.grid(True, ls="--", alpha=0.2, color=FG_DIM, lw=0.5)
+            for sp in ax.spines.values():
+                sp.set_edgecolor(BORDER)
+            ax.tick_params(colors=FG_DIM, labelsize=7)
+        self._fig_st.tight_layout(pad=2.0)
+        self._cv_st.draw()
+
+    def _avaliar_anomalia(self):
+        if self._analyzer is None:
+            messagebox.showwarning("Atencao", "Gere a Golden Curve primeiro."); return
+        if not self._test_curves:
+            messagebox.showwarning("Atencao", "Carregue pelo menos uma curva de teste."); return
+        p  = self._get_params()
+        az = self._analyzer
+        ax = self._ax_an; ax.cla(); self._style_ax(ax)
+        x  = az.x_grid
+
+        ax.fill_between(x, az.mean - az.std, az.mean + az.std,
+                        color=GOLD, alpha=0.15, label="mean ± 1σ (golden)")
+        ax.fill_between(x, az.p05, az.p95,
+                        color=ACCENT, alpha=0.08, label="P5–P95 (golden)")
+        ax.plot(x, az.mean_smooth, color=GOLD, lw=2.0, zorder=10, label="Golden mean")
+
+        ok_pal  = ["#2ecc71", "#27ae60", "#1abc9c", "#52be80"]
+        nok_pal = ["#e74c3c", "#c0392b", "#e67e22", "#d35400"]
+        ok_i = nok_i = 0
+
+        resultados = []
+        for xt, yt, name in self._test_curves:
+            res     = az.anomaly_score(xt, yt, sigma_thr=p["sigma"])
+            verdict = res.get("verdict", "N/A")
+            score   = res.get("score")
+            out_f   = res.get("outside_frac")
+            resultados.append((name, verdict, score, out_f))
+
+            idx = np.argsort(xt)
+            xu, ui = np.unique(xt[idx], return_index=True)
+            yu   = yt[idx][ui]
+            mask = (x >= xu.min()) & (x <= xu.max())
+            f_i  = interp1d(xu, yu, bounds_error=False, fill_value="extrapolate")
+            y_i  = f_i(x[mask])
+
+            if verdict == "OK":
+                cor = ok_pal[ok_i % len(ok_pal)]; ok_i += 1
+            else:
+                cor = nok_pal[nok_i % len(nok_pal)]; nok_i += 1
+
+            lbl = (f"{'✔' if verdict=='OK' else '✘'} {name[:22]}  score={score:.1f}"
+                   if score is not None else name)
+            ax.plot(x[mask], y_i, color=cor, lw=1.8, alpha=0.9,
+                    ls="-" if verdict == "OK" else "--", label=lbl, zorder=15)
+
+        ax.set_xlabel("Curso [mm]", color=FG_DIM, fontsize=9)
+        ax.set_ylabel("Forca [kN]", color=FG_DIM, fontsize=9)
+        ax.set_title(
+            f"Anomalia  |  σ_thr={p['sigma']}  |  "
+            f"{sum(1 for _,v,_,_ in resultados if v=='OK')} OK  /  "
+            f"{sum(1 for _,v,_,_ in resultados if v=='NOK')} NOK",
+            color=FG_DIM, fontsize=9, pad=6)
+        ax.legend(fontsize=7, facecolor=BG2, edgecolor=BORDER, labelcolor=FG,
+                  loc="upper left", ncol=2)
+        ax.grid(True, ls="--", alpha=0.2, color=FG_DIM, lw=0.5)
+        self._fig_an.tight_layout(pad=1.8)
+        self._cv_an.draw()
+        self._nb_inner.select(1)
+
+        linhas = [f"{'Arquivo':<35}  {'Verdict':<6}  {'Score':>6}  {'%fora':>6}"]
+        linhas.append("-" * 60)
+        for name, v, sc, of in resultados:
+            sc_s = f"{sc:6.1f}" if sc is not None else "   N/A"
+            of_s = f"{of*100:5.1f}%" if of is not None else "   N/A"
+            linhas.append(f"{name[:35]:<35}  {v:<6}  {sc_s}  {of_s}")
+        messagebox.showinfo("Resultado Anomalia", "\n".join(linhas))
+
+    def _export_coeffs(self):
+        if self._poly_result is None:
+            messagebox.showwarning("Atencao", "Gere a Golden Curve primeiro."); return
+        path = filedialog.asksaveasfilename(
+            title="Salvar coeficientes CSV",
+            defaultextension=".csv",
+            filetypes=[("CSV", "*.csv")])
+        if not path: return
+        try:
+            pr = self._poly_result; az = self._analyzer
+            with open(path, "w", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(["# Golden Curve — Coeficientes Polinomiais"])
+                w.writerow(["# Gerado em",
+                            datetime.datetime.now().strftime("%Y-%m-%d %H:%M")])
+                w.writerow(["# N curvas",       az.n_valid])
+                w.writerow(["# Grau polinomio", pr["degree"]])
+                w.writerow(["# R2",             f"{pr['r2']:.6f}"])
+                w.writerow(["# X_min [mm]",     f"{az.x_grid[0]:.4f}"])
+                w.writerow(["# X_max [mm]",     f"{az.x_grid[-1]:.4f}"])
+                w.writerow([])
+                w.writerow(["Ordem (grau)", "Coeficiente"])
+                for i, c in enumerate(pr["coeffs"]):
+                    w.writerow([pr["degree"] - i, f"{c:.10e}"])
+                w.writerow([])
+                w.writerow(["# Tabela Golden Curve (X, F_media, F_std, P05, P95)"])
+                w.writerow(["X_mm", "F_mean_kN", "F_std_kN",
+                             "F_P05_kN", "F_P95_kN", "F_poly_kN"])
+                for j in range(len(az.x_grid)):
+                    w.writerow([f"{az.x_grid[j]:.4f}", f"{az.mean[j]:.5f}",
+                                f"{az.std[j]:.5f}",  f"{az.p05[j]:.5f}",
+                                f"{az.p95[j]:.5f}",  f"{pr['y_fit'][j]:.5f}"])
+            messagebox.showinfo("Sucesso", f"Coeficientes salvos em:\n{path}")
+        except Exception as e:
+            messagebox.showerror("Erro", str(e))
+
+    def _save_png(self):
+        if self._analyzer is None:
+            messagebox.showwarning("Atencao", "Gere a Golden Curve primeiro."); return
+        path = filedialog.asksaveasfilename(
+            defaultextension=".png",
+            filetypes=[("PNG", "*.png"), ("PDF", "*.pdf"), ("SVG", "*.svg")])
+        if path:
+            self._fig.savefig(path, dpi=200, bbox_inches="tight",
+                              facecolor=self._fig.get_facecolor())
+            self._status.set(f"Salvo: {os.path.basename(path)}")
+
+    def _export_pdf(self):
+        if not _HAS_REPORTLAB:
+            messagebox.showerror("Erro",
+                "ReportLab nao instalado.\npip install reportlab"); return
+        if self._analyzer is None:
+            messagebox.showwarning("Atencao", "Gere a Golden Curve primeiro."); return
+        path = filedialog.asksaveasfilename(
+            title="Salvar PDF", defaultextension=".pdf",
+            filetypes=[("PDF", "*.pdf")])
+        if not path: return
+        try:
+            self._gerar_pdf(path)
+            messagebox.showinfo("Sucesso", f"PDF salvo em:\n{path}")
+        except Exception as e:
+            messagebox.showerror("Erro ao gerar PDF", str(e))
+
+    def _gerar_pdf(self, path):
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        from reportlab.lib import colors
+        from reportlab.lib.styles import ParagraphStyle
+        from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
+                                        Table, TableStyle, Image as RLImage,
+                                        HRFlowable)
+        from reportlab.lib.enums import TA_CENTER
+
+        az = self._analyzer; pr = self._poly_result
+        now = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
+
+        fig_p, axes_p = plt.subplots(1, 2, figsize=(12, 4.5), facecolor="white")
+        x = az.x_grid
+
+        axes_p[0].fill_between(x, az.p05, az.p95, color="#aaddff", alpha=0.5, label="P5–P95")
+        axes_p[0].fill_between(x, az.mean - az.std, az.mean + az.std,
+                                color="#ffcc44", alpha=0.4, label="mean ± 1σ")
+        axes_p[0].plot(x, az.mean_smooth, color="#c8860a", lw=2.2,
+                       label=f"Media (n={az.n_valid})")
+        if pr:
+            axes_p[0].plot(x, pr["y_fit"], color="#6600cc", lw=1.6, ls="--",
+                           label=f"Poly grau {pr['degree']} R²={pr['r2']:.4f}")
+        axes_p[0].set_title("Golden Curve", fontsize=10)
+        axes_p[0].set_xlabel("Curso [mm]", fontsize=9)
+        axes_p[0].set_ylabel("Forca [kN]", fontsize=9)
+        axes_p[0].legend(fontsize=7); axes_p[0].grid(True, alpha=0.3)
+        axes_p[0].tick_params(labelsize=8)
+
+        axes_p[1].plot(x, az.std, color="#e67e22", lw=1.8)
+        axes_p[1].fill_between(x, 0, az.std, color="#e67e22", alpha=0.25)
+        axes_p[1].set_title("Desvio Padrao σ(x)", fontsize=10)
+        axes_p[1].set_xlabel("Curso [mm]", fontsize=9)
+        axes_p[1].set_ylabel("σ [kN]", fontsize=9)
+        axes_p[1].grid(True, alpha=0.3); axes_p[1].tick_params(labelsize=8)
+
+        buf = io.BytesIO()
+        fig_p.tight_layout()
+        fig_p.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="white")
+        buf.seek(0); plt.close(fig_p)
+
+        doc = SimpleDocTemplate(path, pagesize=A4,
+                                leftMargin=20*mm, rightMargin=20*mm,
+                                topMargin=18*mm, bottomMargin=18*mm)
+        PW = A4[0] - 40*mm
+
+        def s(name, **kw):
+            return ParagraphStyle(name, fontName="Helvetica",
+                                  fontSize=9, textColor=colors.black, **kw)
+
+        s_title  = s("t", fontSize=14, fontName="Helvetica-Bold",
+                     textColor=colors.HexColor("#003366"), spaceAfter=4)
+        s_sec    = s("s", fontSize=10, fontName="Helvetica-Bold",
+                     textColor=colors.HexColor("#003366"), spaceBefore=10, spaceAfter=4)
+        s_author = s("a", fontName="Helvetica-Bold",
+                     textColor=colors.HexColor("#003366"), spaceAfter=2)
+        s_foot   = s("f", fontSize=7, textColor=colors.HexColor("#888888"),
+                     alignment=TA_CENTER)
+
+        def tbl(data, cw):
+            t = Table(data, colWidths=cw)
+            t.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#003366")),
+                ("TEXTCOLOR",  (0, 0), (-1, 0), colors.white),
+                ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE",   (0, 0), (-1, -1), 8),
+                ("ALIGN",      (0, 0), (-1, -1), "CENTER"),
+                ("VALIGN",     (0, 0), (-1, -1), "MIDDLE"),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                 [colors.HexColor("#f0f4f8"), colors.white]),
+                ("GRID",       (0, 0), (-1, -1), 0.3, colors.HexColor("#cccccc")),
+                ("TOPPADDING",    (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]))
+            return t
+
+        story = [
+            Paragraph("RELATORIO — GOLDEN CURVE ANALYZER", s_title),
+            Paragraph("Author: Bruno Bernardinetti - Stellantis", s_author),
+            HRFlowable(width="100%", thickness=2,
+                       color=colors.HexColor("#003366"), spaceAfter=6),
+            Paragraph("Sumario da Analise", s_sec),
+            tbl([["Parametro", "Valor"],
+                 ["N curvas OK",       str(az.n_valid)],
+                 ["X_min [mm]",        f"{az.x_grid[0]:.3f}"],
+                 ["X_max [mm]",        f"{az.x_grid[-1]:.3f}"],
+                 ["F_max medio [kN]",  f"{az.mean.max():.4f}"],
+                 ["F_max std   [kN]",  f"{az.std.max():.4f}"],
+                 ["Grau polinomio",    str(pr["degree"]) if pr else "N/A"],
+                 ["R² polinomio",      f"{pr['r2']:.6f}" if pr else "N/A"],
+                 ["Gerado em",         now],
+                ], [PW*0.55, PW*0.45]),
+            Spacer(1, 6),
+            Paragraph("Coeficientes do Polinomio  F(x) = Σ aᵢ·xⁱ", s_sec),
+        ]
+
+        if pr:
+            rows = [["Ordem (grau)", "Coeficiente"]]
+            for i, c in enumerate(pr["coeffs"]):
+                rows.append([str(pr["degree"] - i), f"{c:.8e}"])
+            story.append(tbl(rows, [PW*0.35, PW*0.65]))
+
+        story += [
+            Spacer(1, 6),
+            Paragraph("Graficos da Golden Curve", s_sec),
+            RLImage(buf, width=PW, height=PW*4.5/12),
+            Spacer(1, 8),
+            HRFlowable(width="100%", thickness=0.5,
+                       color=colors.HexColor("#cccccc"), spaceAfter=4),
+            Paragraph(
+                f"Golden Curve Analyzer  |  Bruno Bernardinetti - Stellantis  |  {now}",
+                s_foot),
+        ]
+        doc.build(story)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # App principal com abas
 # ─────────────────────────────────────────────────────────────────────────────
 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Rugosidade + Interferencia  |  Bruno Bernardinetti - Stellantis")
+        self._ver = _get_app_version()
+        self.title(f"BCI - KNUCKLE SOFTWARE  {self._ver}")
         self.configure(bg=BG)
         self.resizable(True, True)
-        self.minsize(1100, 600)   # altura minima menor — scroll cuida do resto
+        self.minsize(1100, 600)
         self.ra_sede_cal = None
         self._build_ui()
+        _check_update_async(self._ver, lambda tag: self.after(0, lambda: self._show_update_banner(tag)))
+
+    # ── helpers de versão / help ──────────────────────────────────────────────
+    def _show_update_banner(self, new_tag: str):
+        banner = tk.Frame(self, bg="#0e2b0e", padx=10, pady=4)
+        banner.pack(fill="x", before=self._nb)
+        tk.Label(
+            banner,
+            text=f"  Nova versão disponível: {new_tag}  —  "
+                 "github.com/BrunoBernar/rugosidade_optica_teste",
+            font=("Helvetica", 9), fg="#44ff88", bg="#0e2b0e"
+        ).pack(side="left")
+        tk.Button(
+            banner, text=" ✕ ", font=("Helvetica", 9),
+            bg="#0e2b0e", fg="#44ff88", relief="flat", cursor="hand2",
+            command=banner.destroy
+        ).pack(side="right")
+
+    def _open_help(self):
+        candidates = [
+            os.path.join(_SCRIPT_DIR, "manual.pdf"),
+            os.path.join(_SCRIPT_DIR, "Manual.pdf"),
+            os.path.join(_SCRIPT_DIR, "BCI_KNUCKLE_MANUAL.pdf"),
+            os.path.join(_SCRIPT_DIR, "ajuda.pdf"),
+        ]
+        for pdf in candidates:
+            if os.path.exists(pdf):
+                os.startfile(pdf)
+                return
+        messagebox.showinfo(
+            "Ajuda — BCI KNUCKLE SOFTWARE",
+            "Manual não encontrado.\n\n"
+            "Coloque o arquivo 'manual.pdf' na mesma pasta do software e tente novamente."
+        )
 
     def _build_ui(self):
-        hdr=tk.Frame(self,bg=BG,padx=20,pady=10)
+        hdr = tk.Frame(self, bg=BG, padx=20, pady=10)
         hdr.pack(fill="x")
-        tk.Label(hdr,text="SURFACE ROUGHNESS  &  INTERFERENCE FIT ANALYZER",
-                 font=("Courier",13,"bold"),fg=ACCENT,bg=BG).pack(anchor="w")
-        tk.Label(hdr,text="Author: Bruno Bernardinetti - Stellantis  | Brasil",
-                 font=("Helvetica",9),fg=FG_DIM,bg=BG).pack(anchor="w")
-        tk.Frame(self,bg=ACCENT,height=2).pack(fill="x")
+
+        # lado esquerdo — título + autor
+        left = tk.Frame(hdr, bg=BG)
+        left.pack(side="left", fill="x", expand=True)
+        tk.Label(left, text="BCI - KNUCKLE SOFTWARE",
+                 font=("Courier", 13, "bold"), fg=ACCENT, bg=BG).pack(anchor="w")
+        tk.Label(left,
+                 text="Author: Bruno Bernardinetti - Stellantis  |  Brasil",
+                 font=("Helvetica", 9), fg=FG_DIM, bg=BG).pack(anchor="w")
+
+        # lado direito — versão + botão "?"
+        right = tk.Frame(hdr, bg=BG)
+        right.pack(side="right", anchor="ne")
+        tk.Label(right, text=self._ver,
+                 font=("Courier", 9), fg=FG_DIM, bg=BG).pack(anchor="e")
+        tk.Button(
+            right, text=" ? ", font=("Courier", 10, "bold"),
+            bg=BG2, fg=ACCENT, relief="flat", cursor="hand2",
+            activebackground=BG2, activeforeground=ACCENT,
+            command=self._open_help
+        ).pack(anchor="e", pady=(6, 0))
+
+        tk.Frame(self, bg=ACCENT, height=2).pack(fill="x")
 
         style=ttk.Style(self); style.theme_use("default")
         style.configure("TNotebook",background=BG,borderwidth=0,tabmargins=[0,0,0,0])
@@ -1864,7 +3087,9 @@ class App(tk.Tk):
                   foreground=[("selected",ACCENT)],
                   expand=[("selected",[0,0,0,2])])
 
-        nb=ttk.Notebook(self); nb.pack(fill="both",expand=True)
+        self._nb = ttk.Notebook(self)
+        self._nb.pack(fill="both", expand=True)
+        nb = self._nb
 
         self._aba_rug=AbaRugosidade(nb,app_ref=self)
         nb.add(self._aba_rug,text="  Analise de Rugosidade  ")
@@ -1874,6 +3099,9 @@ class App(tk.Tk):
 
         self._aba_xml=AbaXMLComparator(nb)
         nb.add(self._aba_xml,text="  Comparador de Curvas XML  ")
+
+        self._aba_golden=AbaGoldenCurve(nb, app_ref=self)
+        nb.add(self._aba_golden,text="  Golden Curve  ")
 
 
 if __name__ == "__main__":
