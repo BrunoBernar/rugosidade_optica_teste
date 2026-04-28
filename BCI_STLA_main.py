@@ -383,7 +383,7 @@ class _UpdateMandatory:
         win.configure(bg=BG)
         win.resizable(False, False)
         win.grab_set()
-        win.protocol("WM_DELETE_WINDOW", lambda: None)  # bloqueia fechar com X
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
 
         tk.Label(win, text="ATUALIZAÇÃO DISPONÍVEL",
                  font=("Courier", 13, "bold"), fg=ACCENT, bg=BG).pack(pady=(20,4), padx=30)
@@ -504,7 +504,7 @@ class _ProgressModal:
         self.win.resizable(False, False)
         self.win.overrideredirect(False)
         self.win.grab_set()
-        self.win.protocol("WM_DELETE_WINDOW", lambda: None)
+        self.win.protocol("WM_DELETE_WINDOW", self.win.destroy)
 
         # centralizar sobre o pai
         parent.update_idletasks()

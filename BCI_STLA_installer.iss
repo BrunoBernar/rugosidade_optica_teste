@@ -65,6 +65,25 @@ FinishedHeadingLabel=Instalacao concluida!
 FinishedLabel=O {#AppName} foi instalado com sucesso.%n%nPeriodo de avaliacao: 7 dias gratuitos.%nPara licenciamento permanente: {#Contato}%n%nClique em Concluir para sair.
 
 [Code]
+function InitializeSetup(): Boolean;
+var
+  ExistingVersion: String;
+  Msg: String;
+begin
+  Result := True;
+  if RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{A3F2B1C4-9D7E-4F8A-B2C3-1E5D6F7A8B9C}_is1',
+                         'DisplayVersion', ExistingVersion) or
+     RegQueryStringValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{A3F2B1C4-9D7E-4F8A-B2C3-1E5D6F7A8B9C}_is1',
+                         'DisplayVersion', ExistingVersion) then begin
+    if ExistingVersion <> '{#AppVersion}' then begin
+      Msg := 'Versao instalada: ' + ExistingVersion + #13#10 +
+             'Nova versao: {#AppVersion}' + #13#10#13#10 +
+             'Deseja atualizar o BCI STLA agora?';
+      Result := (MsgBox(Msg, mbConfirmation, MB_YESNO) = IDYES);
+    end;
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   AppDataDir, SettFile, Content: String;
