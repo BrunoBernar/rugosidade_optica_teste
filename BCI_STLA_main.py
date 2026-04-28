@@ -299,6 +299,99 @@ AFNOR_ISO = [
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
+# _ProgressModal — barra de progresso para carregamentos longos (≥100 arquivos)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _ProgressModal:
+    """Janela de progresso determinístico — aparece automaticamente quando
+    o número de arquivos a processar atinge o limiar THRESHOLD."""
+
+    THRESHOLD = 100
+
+    def __init__(self, parent, total: int, title: str = "Carregando..."):
+        self._total   = max(total, 1)
+        self._current = 0
+        self.win      = None
+        if total < self.THRESHOLD:
+            return
+
+        self.win = tk.Toplevel(parent)
+        self.win.title(title)
+        self.win.configure(bg=BG)
+        self.win.resizable(False, False)
+        self.win.overrideredirect(False)
+        self.win.grab_set()
+        self.win.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        # centralizar sobre o pai
+        parent.update_idletasks()
+        W, H = 440, 140
+        px = parent.winfo_rootx() + (parent.winfo_width()  - W) // 2
+        py = parent.winfo_rooty() + (parent.winfo_height() - H) // 2
+        self.win.geometry(f"{W}x{H}+{px}+{py}")
+
+        # ── cabeçalho ──────────────────────────────────────────────────────
+        hdr = tk.Frame(self.win, bg=BG2, padx=14, pady=8)
+        hdr.pack(fill="x")
+        tk.Label(hdr, text=title, font=("Courier", 10, "bold"),
+                 fg=ACCENT, bg=BG2, anchor="w").pack(side="left")
+        self._lbl_pct = tk.Label(hdr, text="0 %", font=("Courier", 9),
+                                 fg=FG_DIM, bg=BG2)
+        self._lbl_pct.pack(side="right")
+
+        # ── nome do arquivo atual ───────────────────────────────────────────
+        body = tk.Frame(self.win, bg=BG, padx=14)
+        body.pack(fill="x", pady=(8, 4))
+        self._lbl_file = tk.Label(body, text="", font=("Helvetica", 8),
+                                  fg=FG_DIM, bg=BG, anchor="w", width=52)
+        self._lbl_file.pack(anchor="w")
+
+        # ── barra de progresso ──────────────────────────────────────────────
+        sty = ttk.Style(self.win)
+        sty.theme_use("default")
+        sty.configure(
+            "BCI.Horizontal.TProgressbar",
+            troughcolor=BG2,
+            background=ACCENT,
+            bordercolor=BG2,
+            lightcolor=ACCENT,
+            darkcolor=ACCENT,
+            thickness=16,
+        )
+        self._bar = ttk.Progressbar(
+            self.win, style="BCI.Horizontal.TProgressbar",
+            mode="determinate", maximum=self._total, length=412,
+        )
+        self._bar.pack(padx=14, pady=(0, 6))
+
+        # ── contador ────────────────────────────────────────────────────────
+        self._lbl_count = tk.Label(self.win, text=f"0 / {total}",
+                                   font=("Courier", 8), fg=FG_DIM, bg=BG)
+        self._lbl_count.pack()
+
+        self.win.update()
+
+    def step(self, filename: str = ""):
+        self._current += 1
+        if self.win is None:
+            return
+        self._bar["value"] = self._current
+        pct = int(self._current / self._total * 100)
+        self._lbl_pct.config(text=f"{pct} %")
+        if filename:
+            txt = filename if len(filename) <= 52 else "…" + filename[-51:]
+            self._lbl_file.config(text=txt)
+        self._lbl_count.config(text=f"{self._current} / {self._total}")
+        self.win.update()
+
+    def close(self):
+        if self.win:
+            self.win.grab_release()
+            self.win.destroy()
+            self.win = None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ScrollableFrame — frame com rolagem vertical (mousewheel incluso)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2008,16 +2101,20 @@ class AbaXMLComparator(tk.Frame):
         paths = filedialog.askopenfilenames(
             title="Selecionar arquivos XML",
             filetypes=[("XML files","*.xml"),("All files","*.*")])
+        if not paths:
+            return
+        new_paths = [p for p in paths if not any(e.filepath == p for e in self.entries)]
+        prog = _ProgressModal(self.winfo_toplevel(), len(new_paths), "Carregando XMLs...")
         added = 0
-        for path in paths:
-            if any(e.filepath == path for e in self.entries):
-                continue
+        for path in new_paths:
+            prog.step(os.path.basename(path))
             try:
                 self.entries.append(_CurveEntry(path, _xml_auto_classify(path)))
                 added += 1
             except Exception as err:
                 messagebox.showerror("Erro ao carregar",
                                      f"{os.path.basename(path)}:\n{err}")
+        prog.close()
         if added:
             self._refresh_list(); self._plot()
 
@@ -2567,10 +2664,11 @@ class AbaGoldenCurve(tk.Frame):
                        ("CSV", "*.csv"), ("Todos", "*.*")])
         if not paths:
             return
+        new_paths = [p for p in paths if p not in self._files]
+        prog = _ProgressModal(self.winfo_toplevel(), len(new_paths), "Carregando curvas OK...")
         errs, added, rejected_nok = [], 0, []
-        for p in paths:
-            if p in self._files:
-                continue
+        for p in new_paths:
+            prog.step(os.path.basename(p))
             if _xml_auto_classify(p) == "NOK":
                 rejected_nok.append(os.path.basename(p))
                 continue
@@ -2581,6 +2679,7 @@ class AbaGoldenCurve(tk.Frame):
                 added += 1
             except Exception as e:
                 errs.append(f"{os.path.basename(p)}: {e}")
+        prog.close()
         self._refresh_list()
         if rejected_nok:
             messagebox.showwarning(
@@ -2631,14 +2730,17 @@ class AbaGoldenCurve(tk.Frame):
             filetypes=[("Suportados", "*.xml *.csv"), ("Todos", "*.*")])
         if not paths:
             return
+        prog = _ProgressModal(self.winfo_toplevel(), len(paths), "Carregando curvas de teste...")
         errs, added = [], 0
         for p in paths:
+            prog.step(os.path.basename(p))
             try:
                 x, y = parse_curve_file(p)
                 self._test_curves.append((x, y, os.path.basename(p)))
                 added += 1
             except Exception as e:
                 errs.append(f"{os.path.basename(p)}: {e}")
+        prog.close()
         self._lbl_test.config(text=f"{len(self._test_curves)} curvas de teste")
         if errs:
             messagebox.showwarning("Avisos", "\n".join(errs[:5]))

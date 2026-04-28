@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 a = Analysis(
-    ['roughness_testes.py'],
+    ['BCI_STLA_main.py'],
     pathex=[],
     binaries=[],
     datas=[('stellantis.ico', '.')],
@@ -28,7 +28,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='Rugosidade_Stellantis',
+    name='BCI_STLA',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

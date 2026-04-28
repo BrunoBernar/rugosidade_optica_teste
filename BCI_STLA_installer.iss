@@ -1,9 +1,9 @@
-; Inno Setup Script - BCI KNUCKLE SOFTWARE
+; Inno Setup Script - BCI STLA
 
-#define AppName      "BCI - Knuckle Software"
+#define AppName      "BCI STLA"
 #define AppVersion   "1.0.0"
 #define AppPublisher "Bruno Bernardinetti"
-#define AppExeName   "Rugosidade_Stellantis.exe"
+#define AppExeName   "BCI_STLA.exe"
 #define AppURL       "https://www.stellantis.com"
 #define Contato      "+55 32 9 9965-0392"
 
@@ -16,11 +16,11 @@ AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}
 AppUpdatesURL={#AppURL}
-DefaultDirName={autopf}\BCI-Knuckle
-DefaultGroupName=BCI Knuckle Software
+DefaultDirName={autopf}\BCI_STLA
+DefaultGroupName=BCI STLA
 AllowNoIcons=yes
 OutputDir=installer_output
-OutputBaseFilename=Setup_BCI_Knuckle_v{#AppVersion}
+OutputBaseFilename=Setup_BCI_STLA_v{#AppVersion}
 SetupIconFile=stellantis.ico
 WizardImageFile=compiler:WizClassicImage-IS.bmp
 WizardSmallImageFile=compiler:WizClassicSmallImage-IS.bmp

@@ -1,10 +1,10 @@
 @echo off
 chcp 65001 >nul
-title Build - BCI Knuckle Software
+title Build - BCI STLA
 color 0A
 
 echo ============================================================
-echo  BUILD - BCI Knuckle Software v1.0.0
+echo  BUILD - BCI STLA v1.0.0
 echo ============================================================
 echo.
 
@@ -20,8 +20,8 @@ if not exist "%VENV_PYTHON%" (
 )
 
 :: ─── PASSO 1: Gerar icone ─────────────────────────────────────────────────────
-echo [1/4] Gerando icone Stellantis...
-"%VENV_PYTHON%" create_stellantis_icon.py
+echo [1/4] Gerando icone...
+"%VENV_PYTHON%" BCI_STLA_icon.py
 if errorlevel 1 (
     echo [AVISO] Falha ao gerar icone. Continuando sem icone personalizado.
 ) else (
@@ -31,7 +31,7 @@ echo.
 
 :: ─── PASSO 2: Gerar manual PDF ───────────────────────────────────────────────
 echo [2/4] Gerando manual PDF...
-"%VENV_PYTHON%" gerar_manual.py
+"%VENV_PYTHON%" BCI_STLA_manual.py
 if errorlevel 1 (
     echo [AVISO] Falha ao gerar manual.pdf. O instalador sera gerado sem ele.
 ) else (
@@ -41,12 +41,12 @@ echo.
 
 :: ─── PASSO 3: Compilar executavel com PyInstaller ────────────────────────────
 echo [3/4] Compilando executavel com PyInstaller...
-"%VENV_PYINST%" Rugosidade_Stellantis.spec --noconfirm
+"%VENV_PYINST%" BCI_STLA_build.spec --noconfirm
 if errorlevel 1 (
     echo [ERRO] Falha na compilacao. Veja mensagens acima.
     pause & exit /b 1
 )
-echo [OK] Executavel gerado em dist\Rugosidade_Stellantis.exe
+echo [OK] Executavel gerado em dist\BCI_STLA.exe
 echo.
 
 :: ─── PASSO 4: Gerar instalador com Inno Setup ────────────────────────────────
@@ -62,11 +62,11 @@ if "%ISCC%"=="" (
     echo  Para gerar o instalador:
     echo  1. Baixe o Inno Setup em: https://jrsoftware.org/isdl.php
     echo  2. Instale e execute novamente este script, OU
-    echo  3. Abra setup_rugosidade.iss no Inno Setup IDE e compile manualmente.
+    echo  3. Abra BCI_STLA_installer.iss no Inno Setup IDE e compile manualmente.
     echo.
 ) else (
     mkdir installer_output 2>nul
-    "%ISCC%" setup_rugosidade.iss
+    "%ISCC%" BCI_STLA_installer.iss
     if errorlevel 1 (
         echo [ERRO] Falha ao gerar o instalador.
     ) else (
@@ -77,7 +77,7 @@ if "%ISCC%"=="" (
 echo.
 echo ============================================================
 echo  Processo finalizado!
-echo  Executavel : dist\Rugosidade_Stellantis.exe
-if not "%ISCC%"=="" echo  Instalador : installer_output\Setup_BCI_Knuckle_v1.0.0.exe
+echo  Executavel : dist\BCI_STLA.exe
+if not "%ISCC%"=="" echo  Instalador : installer_output\Setup_BCI_STLA_v1.0.0.exe
 echo ============================================================
 pause
