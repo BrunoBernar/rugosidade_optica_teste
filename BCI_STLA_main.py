@@ -168,13 +168,19 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from scipy.ndimage import sobel
-import os, io, datetime, math, re, subprocess, threading, urllib.request, json, base64, base64
+import os, io, datetime, math, re, subprocess, threading, urllib.request, json, base64, webbrowser
 
 # ── Versão e update ───────────────────────────────────────────────────────────
 __version__  = "v1.0.0"          # atualizar a cada release/tag no git
 _SCRIPT_DIR  = os.path.dirname(os.path.abspath(__file__))
-_GH_API_LATEST = (
+_GH_API_LATEST   = (
     "https://api.github.com/repos/BrunoBernar/rugosidade_optica_teste/releases/latest"
+)
+_GH_API_RELEASES = (
+    "https://api.github.com/repos/BrunoBernar/rugosidade_optica_teste/releases"
+)
+_GH_RELEASES_PAGE = (
+    "https://github.com/BrunoBernar/rugosidade_optica_teste/releases"
 )
 
 def _get_app_version() -> str:
@@ -259,6 +265,96 @@ def _check_update_async(current_ver: str, callback):
         except Exception:
             pass
     threading.Thread(target=_worker, daemon=True).start()
+
+
+def _fetch_all_releases(callback):
+    """Busca todas as releases do GitHub em thread separada → callback(list[dict])."""
+    def _worker():
+        try:
+            req = urllib.request.Request(
+                _GH_API_RELEASES, headers={"User-Agent": "BCI-KNUCKLE-SOFTWARE"}
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                releases = json.loads(resp.read())
+            callback(releases if isinstance(releases, list) else [])
+        except Exception:
+            callback([])
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+class _UpdateBalloon:
+    """Balão estilo Windows 7 — aparece no canto inferior direito, auto-fecha em 8s."""
+
+    _LIFETIME = 8          # segundos visível
+    _W, _H    = 340, 90    # tamanho do balão
+    _PAD_X    = 18         # distância da borda direita
+    _PAD_Y    = 52         # distância da borda inferior (acima da barra de tarefas)
+
+    def __init__(self, root: tk.Tk, new_tag: str, on_click):
+        self._root     = root
+        self._new_tag  = new_tag
+        self._on_click = on_click
+        self._remaining = self._LIFETIME
+
+        sw = root.winfo_screenwidth()
+        sh = root.winfo_screenheight()
+        x  = sw - self._W - self._PAD_X
+        y  = sh - self._H - self._PAD_Y
+
+        self.win = tk.Toplevel(root)
+        self.win.overrideredirect(True)
+        self.win.attributes("-topmost", True)
+        self.win.geometry(f"{self._W}x{self._H}+{x}+{y}")
+        self.win.configure(bg="#1a2a34")
+
+        # borda ACCENT
+        border = tk.Frame(self.win, bg=ACCENT, padx=1, pady=1)
+        border.pack(fill="both", expand=True)
+        inner = tk.Frame(border, bg="#0d1a24", padx=12, pady=10)
+        inner.pack(fill="both", expand=True)
+
+        # cabeçalho
+        hdr = tk.Frame(inner, bg="#0d1a24")
+        hdr.pack(fill="x")
+        tk.Label(hdr, text="BCI KNUCKLE SOFTWARE",
+                 font=("Courier", 8, "bold"), fg=ACCENT, bg="#0d1a24").pack(side="left")
+        self._lbl_timer = tk.Label(hdr, text=f"({self._remaining}s)",
+                                   font=("Courier", 7), fg=FG_DIM, bg="#0d1a24")
+        self._lbl_timer.pack(side="right")
+
+        # corpo
+        tk.Label(inner,
+                 text=f"Nova versão disponível:  {new_tag}",
+                 font=("Helvetica", 9, "bold"), fg=FG, bg="#0d1a24",
+                 anchor="w").pack(fill="x", pady=(4, 0))
+        tk.Label(inner,
+                 text="Clique para ver versões e baixar  ›",
+                 font=("Helvetica", 8), fg="#44aaff", bg="#0d1a24",
+                 cursor="hand2", anchor="w").pack(fill="x")
+
+        # bind clique em toda a área
+        for w in (self.win, border, inner, hdr):
+            w.bind("<Button-1>", self._clicked)
+        for child in inner.winfo_children():
+            child.bind("<Button-1>", self._clicked)
+
+        self._tick()
+
+    def _tick(self):
+        if not self.win.winfo_exists():
+            return
+        self._remaining -= 1
+        if self._remaining <= 0:
+            self.win.destroy()
+            return
+        self._lbl_timer.config(text=f"({self._remaining}s)")
+        self.win.after(1000, self._tick)
+
+    def _clicked(self, _event=None):
+        if self.win.winfo_exists():
+            self.win.destroy()
+        self._on_click()
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 from reportlab.lib.pagesizes import A4
@@ -3170,23 +3266,87 @@ class App(tk.Tk):
         self.ra_sede_cal = None
         self._build_ui()
         self._check_trial()
-        _check_update_async(self._ver, lambda tag: self.after(0, lambda: self._show_update_banner(tag)))
+        _check_update_async(self._ver, lambda tag: self.after(0, lambda: self._show_update_balloon(tag)))
 
     # ── helpers de versão / help ──────────────────────────────────────────────
-    def _show_update_banner(self, new_tag: str):
-        banner = tk.Frame(self, bg="#0e2b0e", padx=10, pady=4)
-        banner.pack(fill="x", before=self._nb)
-        tk.Label(
-            banner,
-            text=f"  Nova versão disponível: {new_tag}  —  "
-                 "github.com/BrunoBernar/rugosidade_optica_teste",
-            font=("Helvetica", 9), fg="#44ff88", bg="#0e2b0e"
-        ).pack(side="left")
-        tk.Button(
-            banner, text=" ✕ ", font=("Helvetica", 9),
-            bg="#0e2b0e", fg="#44ff88", relief="flat", cursor="hand2",
-            command=banner.destroy
-        ).pack(side="right")
+    def _show_update_balloon(self, new_tag: str):
+        _UpdateBalloon(self, new_tag, self._open_update_dialog)
+
+    def _open_update_dialog(self):
+        win = tk.Toplevel(self)
+        win.title("Versões disponíveis")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.grab_set()
+
+        tk.Label(win, text="VERSÕES DISPONÍVEIS",
+                 font=("Courier", 11, "bold"), fg=ACCENT, bg=BG).pack(pady=(18, 4), padx=30)
+        tk.Label(win, text=f"Versão instalada: {self._ver}",
+                 font=("Courier", 9), fg=FG_DIM, bg=BG).pack()
+
+        # área de lista com scroll
+        frm = tk.Frame(win, bg=BG2, padx=4, pady=4)
+        frm.pack(fill="both", expand=True, padx=20, pady=10)
+
+        canvas   = tk.Canvas(frm, bg=BG2, highlightthickness=0, width=460, height=220)
+        scroll   = tk.Scrollbar(frm, orient="vertical", command=canvas.yview)
+        inner    = tk.Frame(canvas, bg=BG2)
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        inner.bind("<Configure>",
+                   lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+
+        lbl_status = tk.Label(win, text="Buscando versões...",
+                              font=("Helvetica", 8), fg=FG_DIM, bg=BG)
+        lbl_status.pack(pady=(0, 4))
+
+        def _populate(releases):
+            lbl_status.config(text="")
+            if not releases:
+                tk.Label(inner, text="Nenhuma versão encontrada ou sem conexão.",
+                         font=("Helvetica", 9), fg=FG_DIM, bg=BG2).pack(pady=20)
+                return
+            for rel in releases:
+                tag      = rel.get("tag_name", "?")
+                name     = rel.get("name", tag)
+                pub_date = rel.get("published_at", "")[:10]
+                url      = rel.get("html_url", _GH_RELEASES_PAGE)
+                is_cur   = (tag == self._ver)
+
+                row = tk.Frame(inner, bg=BG2, pady=4)
+                row.pack(fill="x", padx=4)
+                tk.Frame(inner, bg=BORDER, height=1).pack(fill="x", padx=4)
+
+                tag_color = ACCENT if is_cur else FG
+                tk.Label(row, text=tag, font=("Courier", 10, "bold"),
+                         fg=tag_color, bg=BG2, width=10, anchor="w").pack(side="left")
+                tk.Label(row, text=name[:32], font=("Helvetica", 8),
+                         fg=FG_DIM, bg=BG2, anchor="w").pack(side="left", padx=6)
+                tk.Label(row, text=pub_date, font=("Courier", 8),
+                         fg=FG_DIM, bg=BG2).pack(side="left")
+
+                if is_cur:
+                    tk.Label(row, text="  ✔ instalada", font=("Helvetica", 8, "italic"),
+                             fg=ACCENT, bg=BG2).pack(side="right", padx=8)
+                else:
+                    tk.Button(row, text="Baixar", font=("Courier", 8, "bold"),
+                              bg=ACCENT, fg=BG, relief="flat", padx=8, pady=2,
+                              cursor="hand2",
+                              command=lambda u=url: webbrowser.open(u)
+                              ).pack(side="right", padx=8)
+
+        win.after(0, lambda: _fetch_all_releases(lambda r: win.after(0, lambda: _populate(r))))
+
+        tk.Button(win, text="Abrir página de releases no GitHub",
+                  font=("Helvetica", 8), fg="#44aaff", bg=BG,
+                  relief="flat", cursor="hand2",
+                  command=lambda: webbrowser.open(_GH_RELEASES_PAGE)
+                  ).pack(pady=(0, 4))
+        tk.Button(win, text="Fechar", font=("Helvetica", 9),
+                  bg=BG2, fg=FG, relief="flat", padx=16, pady=5,
+                  command=win.destroy).pack(pady=(0, 16))
 
     def _check_trial(self):
         days = _trial_days_left()
@@ -3242,20 +3402,67 @@ class App(tk.Tk):
         win.configure(bg=BG)
         win.resizable(False, False)
         win.grab_set()
+
         tk.Label(win, text="CONFIGURAÇÕES",
                  font=("Courier", 11, "bold"), fg=ACCENT, bg=BG).pack(pady=(20, 10), padx=30)
+
+        # ── Atualização automática ────────────────────────────────────────────
         frm = tk.Frame(win, bg=BG2, padx=20, pady=15)
         frm.pack(fill="x", padx=20, pady=4)
+        tk.Label(frm, text="ATUALIZAÇÃO", font=("Courier", 8, "bold"),
+                 fg=FG_DIM, bg=BG2).pack(anchor="w", pady=(0, 6))
+
         var = tk.BooleanVar(value=auto)
         tk.Checkbutton(
             frm, text="Verificar atualizações automaticamente ao iniciar",
             variable=var, bg=BG2, fg=FG, activebackground=BG2,
             activeforeground=FG, selectcolor=BG, font=("Helvetica", 9)
         ).pack(anchor="w")
+
+        lbl_chk = tk.Label(frm, text="", font=("Helvetica", 8), fg=FG_DIM, bg=BG2)
+        lbl_chk.pack(anchor="w", pady=(6, 0))
+
+        def _check_now():
+            lbl_chk.config(text="Verificando...", fg=FG_DIM)
+            frm.update_idletasks()
+            def _on_result(releases):
+                if not releases:
+                    win.after(0, lambda: lbl_chk.config(
+                        text="Sem conexão ou nenhuma versão encontrada.", fg=FG_WARN))
+                    return
+                latest_tag = releases[0].get("tag_name", "?")
+                if latest_tag == self._ver:
+                    win.after(0, lambda: lbl_chk.config(
+                        text=f"✔ Você já usa a versão mais recente ({self._ver})", fg=ACCENT))
+                else:
+                    def _open():
+                        win.grab_release()
+                        win.destroy()
+                        self._open_update_dialog()
+                    win.after(0, lambda: lbl_chk.config(
+                        text=f"Nova versão disponível: {latest_tag}  — clique para ver",
+                        fg="#44aaff", cursor="hand2"))
+                    win.after(0, lambda: lbl_chk.bind("<Button-1>", lambda _e: _open()))
+            _fetch_all_releases(_on_result)
+
+        tk.Button(frm, text="Verificar agora", font=("Helvetica", 9),
+                  bg=BG, fg=ACCENT, relief="flat", padx=10, pady=3,
+                  cursor="hand2", command=_check_now).pack(anchor="w", pady=(4, 0))
+
+        tk.Button(frm, text="Ver todas as versões disponíveis ›",
+                  font=("Helvetica", 8), fg="#44aaff", bg=BG2,
+                  relief="flat", cursor="hand2",
+                  command=lambda: [win.grab_release(), win.destroy(),
+                                   self._open_update_dialog()]
+                  ).pack(anchor="w", pady=(2, 0))
+
+        # ── Salvar / fechar ───────────────────────────────────────────────────
         def _save():
             sett["auto_update"] = var.get()
             _save_settings(sett)
             win.destroy()
+
+        tk.Frame(win, bg=BORDER, height=1).pack(fill="x", padx=20, pady=(10, 0))
         tk.Button(win, text="Salvar", font=("Helvetica", 10, "bold"),
                   bg=ACCENT, fg=BG, relief="flat", padx=20, pady=6,
                   command=_save).pack(pady=(10, 20))
