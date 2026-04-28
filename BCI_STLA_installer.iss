@@ -39,7 +39,7 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 
 [Tasks]
 Name: "desktopicon";  Description: "Criar atalho na Area de Trabalho"; GroupDescription: "Icones adicionais:"; Flags: unchecked
-Name: "autoupdate";   Description: "Verificar atualizacoes automaticamente ao iniciar"; GroupDescription: "Opcoes:"; Flags: checked
+Name: "autoupdate";   Description: "Verificar atualizacoes automaticamente ao iniciar"; GroupDescription: "Opcoes:"
 
 [Files]
 Source: "dist\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
@@ -73,7 +73,7 @@ begin
     AppDataDir := ExpandConstant('{userappdata}\BCI-Knuckle');
     ForceDirectories(AppDataDir);
     SettFile := AppDataDir + '\settings.json';
-    if IsTaskSelected('autoupdate') then
+    if WizardIsTaskSelected('autoupdate') then
       Content := '{"auto_update": true}'
     else
       Content := '{"auto_update": false}';
