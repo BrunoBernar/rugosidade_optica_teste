@@ -271,7 +271,7 @@ def _check_update_async(current_ver: str, callback):
             sett["last_update_check"] = datetime.date.today().isoformat()
             _save_settings(sett)
             if latest and latest != current_ver:
-                callback(latest)
+                callback(latest, data)   # passa release completo
         except Exception:
             pass
     threading.Thread(target=_worker, daemon=True).start()
@@ -292,78 +292,155 @@ def _fetch_all_releases(callback):
     threading.Thread(target=_worker, daemon=True).start()
 
 
-class _UpdateBalloon:
-    """Balão estilo Windows 7 — aparece no canto inferior direito, auto-fecha em 8s."""
+def _download_and_run_update(release: dict, status_cb):
+    """Tenta baixar o instalador .exe do release asset e executar."""
+    assets = release.get("assets", [])
+    exe_asset = next((a for a in assets if a.get("name", "").endswith(".exe")), None)
+    if not exe_asset:
+        status_cb("no_asset")
+        return
+    url  = exe_asset["browser_download_url"]
+    name = exe_asset["name"]
+    dest = os.path.join(os.environ.get("TEMP", _SCRIPT_DIR), name)
+    try:
+        status_cb("downloading")
+        req = urllib.request.Request(url, headers={"User-Agent": "BCI-KNUCKLE-SOFTWARE"})
+        with urllib.request.urlopen(req, timeout=120) as r, open(dest, "wb") as f:
+            while True:
+                chunk = r.read(65536)
+                if not chunk:
+                    break
+                f.write(chunk)
+        status_cb("done:" + dest)
+    except Exception as e:
+        status_cb("error:" + str(e))
 
-    _LIFETIME = 8          # segundos visível
-    _W, _H    = 340, 90    # tamanho do balão
-    _PAD_X    = 18         # distância da borda direita
-    _PAD_Y    = 52         # distância da borda inferior (acima da barra de tarefas)
 
-    def __init__(self, root: tk.Tk, new_tag: str, on_click):
-        self._root     = root
-        self._new_tag  = new_tag
-        self._on_click = on_click
-        self._remaining = self._LIFETIME
+class _UpdateMandatory:
+    """Notificacao obrigatoria de update — balao W7 no canto + dialogo modal sem fechar."""
 
-        sw = root.winfo_screenwidth()
-        sh = root.winfo_screenheight()
+    _W, _H  = 360, 110
+    _PAD_X  = 18
+    _PAD_Y  = 52
+
+    def __init__(self, root: tk.Tk, new_tag: str, release: dict, on_details):
+        self._root      = root
+        self._new_tag   = new_tag
+        self._release   = release
+        self._on_details = on_details
+        self._balloon   = None
+        self._show_balloon()
+
+    def _show_balloon(self):
+        sw = self._root.winfo_screenwidth()
+        sh = self._root.winfo_screenheight()
         x  = sw - self._W - self._PAD_X
         y  = sh - self._H - self._PAD_Y
 
-        self.win = tk.Toplevel(root)
-        self.win.overrideredirect(True)
-        self.win.attributes("-topmost", True)
-        self.win.geometry(f"{self._W}x{self._H}+{x}+{y}")
-        self.win.configure(bg="#1a2a34")
+        win = tk.Toplevel(self._root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.geometry(f"{self._W}x{self._H}+{x}+{y}")
+        win.configure(bg=BG3)
+        self._balloon = win
 
-        # borda ACCENT
-        border = tk.Frame(self.win, bg=ACCENT, padx=1, pady=1)
+        border = tk.Frame(win, bg=ACCENT, padx=1, pady=1)
         border.pack(fill="both", expand=True)
         inner = tk.Frame(border, bg="#0d1a24", padx=12, pady=10)
         inner.pack(fill="both", expand=True)
 
-        # cabeçalho
-        hdr = tk.Frame(inner, bg="#0d1a24")
-        hdr.pack(fill="x")
-        tk.Label(hdr, text="BCI KNUCKLE SOFTWARE",
-                 font=("Courier", 8, "bold"), fg=ACCENT, bg="#0d1a24").pack(side="left")
-        self._lbl_timer = tk.Label(hdr, text=f"({self._remaining}s)",
-                                   font=("Courier", 7), fg=FG_DIM, bg="#0d1a24")
-        self._lbl_timer.pack(side="right")
+        tk.Label(inner, text="BCI KNUCKLE SOFTWARE  —  ATUALIZAÇÃO DISPONÍVEL",
+                 font=("Courier", 8, "bold"), fg=ACCENT, bg="#0d1a24").pack(anchor="w")
+        tk.Label(inner, text=f"Nova versão:  {self._new_tag}",
+                 font=("Helvetica", 10, "bold"), fg=FG, bg="#0d1a24").pack(anchor="w", pady=(4,2))
 
-        # corpo
-        tk.Label(inner,
-                 text=f"Nova versão disponível:  {new_tag}",
-                 font=("Helvetica", 9, "bold"), fg=FG, bg="#0d1a24",
-                 anchor="w").pack(fill="x", pady=(4, 0))
-        tk.Label(inner,
-                 text="Clique para ver versões e baixar  ›",
-                 font=("Helvetica", 8), fg="#44aaff", bg="#0d1a24",
-                 cursor="hand2", anchor="w").pack(fill="x")
+        btn_row = tk.Frame(inner, bg="#0d1a24")
+        btn_row.pack(fill="x", pady=(4, 0))
+        tk.Button(btn_row, text="Atualizar agora  ›",
+                  font=("Courier", 9, "bold"), bg=ACCENT, fg=BG,
+                  relief="flat", padx=10, pady=3, cursor="hand2",
+                  command=self._update_now).pack(side="left")
+        tk.Button(btn_row, text="Lembrar em 7 dias",
+                  font=("Courier", 8), bg="#0d1a24", fg=FG_DIM,
+                  relief="flat", padx=8, pady=3, cursor="hand2",
+                  command=self._postpone).pack(side="right")
 
-        # bind clique em toda a área
-        for w in (self.win, border, inner, hdr):
-            w.bind("<Button-1>", self._clicked)
-        for child in inner.winfo_children():
-            child.bind("<Button-1>", self._clicked)
+    def _update_now(self):
+        if self._balloon and self._balloon.winfo_exists():
+            self._balloon.destroy()
+        self._show_update_modal()
 
-        self._tick()
+    def _postpone(self):
+        sett = _get_settings()
+        sett["last_update_check"] = datetime.date.today().isoformat()
+        _save_settings(sett)
+        if self._balloon and self._balloon.winfo_exists():
+            self._balloon.destroy()
 
-    def _tick(self):
-        if not self.win.winfo_exists():
-            return
-        self._remaining -= 1
-        if self._remaining <= 0:
-            self.win.destroy()
-            return
-        self._lbl_timer.config(text=f"({self._remaining}s)")
-        self.win.after(1000, self._tick)
+    def _show_update_modal(self):
+        win = tk.Toplevel(self._root)
+        win.title("Atualização Obrigatória")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.grab_set()
+        win.protocol("WM_DELETE_WINDOW", lambda: None)  # bloqueia fechar com X
 
-    def _clicked(self, _event=None):
-        if self.win.winfo_exists():
-            self.win.destroy()
-        self._on_click()
+        tk.Label(win, text="ATUALIZAÇÃO DISPONÍVEL",
+                 font=("Courier", 13, "bold"), fg=ACCENT, bg=BG).pack(pady=(20,4), padx=30)
+        tk.Label(win, text=f"Versão instalada: {__version__}   →   Nova versão: {self._new_tag}",
+                 font=("Courier", 9), fg=FG_DIM, bg=BG).pack()
+
+        notes = self._release.get("body", "").strip()[:300] or "Acesse o GitHub para ver as novidades."
+        frm = tk.Frame(win, bg=BG2, padx=16, pady=10)
+        frm.pack(fill="x", padx=20, pady=10)
+        tk.Label(frm, text="Novidades:", font=("Courier", 8, "bold"), fg=FG_DIM, bg=BG2).pack(anchor="w")
+        tk.Label(frm, text=notes, font=("Helvetica", 8), fg=FG, bg=BG2,
+                 wraplength=360, justify="left").pack(anchor="w", pady=(2,0))
+
+        lbl_status = tk.Label(win, text="", font=("Helvetica", 8), fg=FG_DIM, bg=BG)
+        lbl_status.pack(pady=(0,4))
+
+        has_asset = bool(self._release.get("assets"))
+
+        def _do_download():
+            btn_dl.config(state="disabled", text="Baixando...")
+            lbl_status.config(text="Conectando ao GitHub...", fg=FG_DIM)
+            def _cb(status):
+                if status == "downloading":
+                    win.after(0, lambda: lbl_status.config(text="Baixando instalador...", fg=FG_DIM))
+                elif status.startswith("done:"):
+                    path = status[5:]
+                    win.after(0, lambda: lbl_status.config(
+                        text="Download concluído! Iniciando instalador...", fg=ACCENT))
+                    win.after(500, lambda: [os.startfile(path), self._root.quit()])
+                elif status == "no_asset":
+                    win.after(0, lambda: [
+                        lbl_status.config(text="Instalador não encontrado no release. Abrindo GitHub...", fg=FG_WARN),
+                        webbrowser.open(self._release.get("html_url", _GH_RELEASES_PAGE))
+                    ])
+                else:
+                    win.after(0, lambda: lbl_status.config(text=f"Erro: {status[6:]}", fg=RED))
+            threading.Thread(target=_download_and_run_update,
+                             args=(self._release, _cb), daemon=True).start()
+
+        if has_asset:
+            btn_dl = tk.Button(win, text="Baixar e instalar automaticamente",
+                               font=("Helvetica", 10, "bold"),
+                               bg=ACCENT, fg=BG, relief="flat", padx=20, pady=8,
+                               cursor="hand2", command=_do_download)
+            btn_dl.pack(pady=(0, 6))
+
+        tk.Button(win, text="Ver versões no GitHub  ›",
+                  font=("Helvetica", 9), fg="#44aaff", bg=BG, relief="flat",
+                  cursor="hand2",
+                  command=lambda: webbrowser.open(self._release.get("html_url", _GH_RELEASES_PAGE))
+                  ).pack(pady=(0, 4))
+
+        tk.Button(win, text="Lembrar em 7 dias",
+                  font=("Helvetica", 8), fg=FG_DIM, bg=BG2, relief="flat",
+                  padx=12, pady=4, cursor="hand2",
+                  command=lambda: [self._postpone(), win.destroy()]
+                  ).pack(pady=(0, 16))
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -3276,11 +3353,11 @@ class App(tk.Tk):
         self.ra_sede_cal = None
         self._build_ui()
         self._check_trial()
-        _check_update_async(self._ver, lambda tag: self.after(0, lambda: self._show_update_balloon(tag)))
+        _check_update_async(self._ver, lambda tag, rel: self.after(0, lambda: self._show_update_balloon(tag, rel)))
 
     # ── helpers de versão / help ──────────────────────────────────────────────
-    def _show_update_balloon(self, new_tag: str):
-        _UpdateBalloon(self, new_tag, self._open_update_dialog)
+    def _show_update_balloon(self, new_tag: str, release: dict):
+        _UpdateMandatory(self, new_tag, release, self._open_update_dialog)
 
     def _open_update_dialog(self):
         win = tk.Toplevel(self)

@@ -4,7 +4,7 @@ a = Analysis(
     ['BCI_STLA_main.py'],
     pathex=[],
     binaries=[],
-    datas=[('stellantis.ico', '.')],
+    datas=[('stellantis.ico', '.'), ('manual.pdf', '.')],
     hiddenimports=[
         'PIL._tkinter_finder',
         'reportlab.graphics.barcode.common',
