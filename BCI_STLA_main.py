@@ -250,7 +250,15 @@ def _check_update_async(current_ver: str, callback):
     """Só roda quando instalado (sem .git) e auto_update ativo nas configurações."""
     if _IS_DEV:
         return
-    if not _get_settings().get("auto_update", True):
+    sett = _get_settings()
+    if not sett.get("auto_update", True):
+        return
+    last = sett.get("last_update_check", "")
+    try:
+        days_since = (datetime.date.today() - datetime.date.fromisoformat(last)).days
+    except Exception:
+        days_since = 999
+    if days_since < 7:
         return
     def _worker():
         try:
@@ -260,6 +268,8 @@ def _check_update_async(current_ver: str, callback):
             with urllib.request.urlopen(req, timeout=6) as resp:
                 data = json.loads(resp.read())
             latest = data.get("tag_name", "").strip()
+            sett["last_update_check"] = datetime.date.today().isoformat()
+            _save_settings(sett)
             if latest and latest != current_ver:
                 callback(latest)
         except Exception:
