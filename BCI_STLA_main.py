@@ -132,6 +132,24 @@ Objetivo: Gerar uma curva teórica de referência ("Golden Curve") a partir
            – Distribuição de força mínima
            – Desvio padrão ao longo do curso
 
+  ── ETAPA 3b (opcional): Definir Curva Perfeita ────────────────────────────
+  3b. Clique em "📐 Adicionar curva perfeita"
+        • Selecione um arquivo XML ou CSV que representa a curva ideal do processo
+        • Essa curva é usada como CENTRO da janela de aprovação ao avaliar anomalias
+        • Marque "Usar na detecção de anomalia" para ativá-la
+        • Clique em "🗑 Remover curva perfeita" para voltar ao modo Golden mean
+
+      Como a Curva Perfeita muda a detecção:
+        – SEM curva perfeita: a janela de aprovação é centrada na média das curvas OK
+          e a largura da banda usa o desvio padrão da população golden.
+        – COM curva perfeita ativa: a janela de aprovação é centrada na curva perfeita
+          e a largura da banda é calculada como o desvio das curvas OK em relação
+          à curva perfeita (não à média). Os desvios são suavizados com filtro
+          gaussiano (σ proporcional à grade) para eliminar picos locais causados
+          por curvas OK que possuem anomalias em posições específicas do curso.
+          O score e o veredito usam exclusivamente esses dados estatísticos
+          derivados da curva perfeita.
+
   ── ETAPA 4: Detectar anomalia em nova curva ───────────────────────────────
   4a. Clique em "➕ Carregar curva(s) para teste"
         • Selecione XML ou CSV da curva a avaliar (pode ser NOK)
@@ -140,8 +158,14 @@ Objetivo: Gerar uma curva teórica de referência ("Golden Curve") a partir
         • Score de anomalia calculado (0–100): quanto mais alto, mais suspeito
         • Veredito automático: OK (score < 40 e < 5% fora da banda)
                                NOK (caso contrário)
-        • Sub-aba "Anomalia" exibe a curva sobreposta à banda de confiança,
-          destacando os pontos fora do limite em vermelho
+        • Sub-aba "Anomalia" exibe:
+            – Curva avaliada sobreposta à janela de aprovação
+            – Banda ref ± 1σ (dourada): intervalo de ±1 desvio padrão em torno
+              da referência (curva perfeita ou golden mean)
+            – Banda P5–P95 (azul): intervalo entre o 5º e 95º percentil das
+              curvas OK, calculado em relação à referência ativa
+            – Curva perfeita em branco (quando ativa)
+            – Curvas avaliadas em verde (OK) ou vermelho/laranja (NOK)
   4c. Clique em "🗑 Limpar teste" para remover as curvas de teste
 
   ── Exportação ─────────────────────────────────────────────────────────────
@@ -152,6 +176,7 @@ Objetivo: Gerar uma curva teórica de referência ("Golden Curve") a partir
   Notas:
     • Mínimo de 3 curvas OK para gerar a Golden Curve
     • O filtro de Ponto/Ano afeta diretamente quais curvas entram na análise
+    • A curva perfeita não precisa pertencer ao conjunto de curvas OK carregadas
 
 ================================================================================
 Dependencias:
@@ -171,7 +196,7 @@ from scipy.ndimage import sobel
 import os, io, datetime, math, re, subprocess, threading, urllib.request, json, base64, webbrowser
 
 # ── Versão e update ───────────────────────────────────────────────────────────
-__version__  = "v1.0.0"          # atualizar a cada release/tag no git
+__version__  = "v1.0.2"          # atualizar a cada release/tag no git
 _SCRIPT_DIR  = os.path.dirname(os.path.abspath(__file__))
 _GH_API_LATEST   = (
     "https://api.github.com/repos/BrunoBernar/rugosidade_optica_teste/releases/latest"
@@ -2582,8 +2607,25 @@ def parse_curve_file(filepath):
 
 class GoldenCurveAnalyzer:
     """
-    Recebe lista de pares (x_arr, y_arr) de curvas OK e calcula:
-    curva media, banda de confianca, ajuste polinomial/spline e score de anomalia.
+    Motor estatístico do Módulo 4 — Golden Curve Analyzer.
+
+    Recebe uma lista de curvas OK reais (pares x_arr, y_arr) e constrói:
+      - Uma grade X comum por interpolação linear de todas as curvas
+      - Estatísticas ponto a ponto: média, mediana, desvio padrão, percentis
+      - Curva média suavizada por filtro gaussiano (mean_smooth)
+      - Métodos de ajuste por polinômio e spline
+      - Método de score de anomalia para avaliar novas curvas
+
+    Atributos públicos após _compute():
+      x_grid       : grade X uniforme com n_interp pontos (mm)
+      matrix       : matriz (n_válidas × n_interp) com todas as curvas interpoladas
+      mean         : média ponto a ponto da população OK
+      median       : mediana ponto a ponto
+      std          : desvio padrão ponto a ponto da população OK
+      p05 / p95    : percentis 5% e 95% ponto a ponto
+      p25 / p75    : percentis 25% e 75% ponto a ponto
+      mean_smooth  : média suavizada com filtro gaussiano (sigma = smooth)
+      f_max/min_per_curve : força máxima e mínima de cada curva (para histogramas)
     """
 
     def __init__(self, curves: list[tuple[np.ndarray, np.ndarray]],
@@ -2591,32 +2633,41 @@ class GoldenCurveAnalyzer:
                  smooth_sigma: float = 2.0):
         if len(curves) < 3:
             raise ValueError("Minimo de 3 curvas para analise.")
-        self.n_curves  = len(curves)
-        self.n_interp  = n_interp
-        self.smooth    = smooth_sigma
+        self.n_curves  = len(curves)    # total de curvas fornecidas
+        self.n_interp  = n_interp       # número de pontos da grade X
+        self.smooth    = smooth_sigma   # sigma do filtro gaussiano sobre a média
         self._raw      = curves
         self._compute()
 
     def _compute(self):
+        # Determina a faixa X comum a todas as curvas (interseção dos domínios)
         x_min = max(c[0].min() for c in self._raw)
         x_max = min(c[0].max() for c in self._raw)
         if x_min >= x_max:
             raise ValueError(
                 "As curvas nao se sobrepoem no eixo X. "
                 "Verifique se todas as curvas cobrem a mesma faixa de curso.")
+
+        # Grade X uniforme — base comum para comparar todas as curvas
         self.x_grid = np.linspace(x_min, x_max, self.n_interp)
+
+        # Interpola cada curva na grade X e empilha na matriz
         mat = []
         for x, y in self._raw:
             idx  = np.argsort(x)
-            xu, ui = np.unique(x[idx], return_index=True)
+            xu, ui = np.unique(x[idx], return_index=True)   # remove X duplicados
             yu = y[idx][ui]
             if len(xu) < 2:
-                continue
+                continue    # curva com menos de 2 pontos é ignorada
             f = interp1d(xu, yu, kind="linear",
                          bounds_error=False, fill_value="extrapolate")
             mat.append(f(self.x_grid))
+
+        # matrix[i, j] = força da curva i no ponto j da grade X
         self.matrix   = np.array(mat)
-        self.n_valid  = len(mat)
+        self.n_valid  = len(mat)   # número de curvas efetivamente usadas
+
+        # Estatísticas ponto a ponto da população OK
         self.mean     = np.mean(self.matrix, axis=0)
         self.median   = np.median(self.matrix, axis=0)
         self.std      = np.std(self.matrix, axis=0)
@@ -2624,12 +2675,17 @@ class GoldenCurveAnalyzer:
         self.p95      = np.percentile(self.matrix, 95, axis=0)
         self.p25      = np.percentile(self.matrix, 25, axis=0)
         self.p75      = np.percentile(self.matrix, 75, axis=0)
+
+        # Média suavizada — reduz ruído de alta frequência para plotagem e ajuste
         self.mean_smooth = (gaussian_filter1d(self.mean, sigma=self.smooth)
                             if self.smooth > 0 else self.mean.copy())
+
+        # Força máxima e mínima de cada curva — usadas nos histogramas de estatísticas
         self.f_max_per_curve = self.matrix.max(axis=1)
         self.f_min_per_curve = self.matrix.min(axis=1)
 
     def fit_polynomial(self, degree: int = 6) -> dict:
+        """Ajusta um polinômio de grau `degree` sobre a curva média suavizada."""
         degree = max(1, min(degree, POLY_MAX))
         coeffs = np.polyfit(self.x_grid, self.mean_smooth, degree)
         poly   = np.poly1d(coeffs)
@@ -2639,6 +2695,7 @@ class GoldenCurveAnalyzer:
         return dict(coeffs=coeffs, poly=poly, y_fit=y_fit, r2=r2, degree=degree)
 
     def fit_spline(self, smoothing: float | None = None) -> dict:
+        """Ajusta um spline cúbico suavizado sobre a curva média."""
         from scipy.interpolate import UnivariateSpline
         s = smoothing if smoothing is not None else len(self.x_grid) * 0.5
         spl   = UnivariateSpline(self.x_grid, self.mean_smooth, s=s, k=3)
@@ -2649,22 +2706,58 @@ class GoldenCurveAnalyzer:
 
     def anomaly_score(self, x_new: np.ndarray, y_new: np.ndarray,
                       sigma_thr: float = 3.0,
-                      reference: np.ndarray | None = None) -> dict:
+                      reference: np.ndarray | None = None,
+                      ref_std: np.ndarray | None = None) -> dict:
+        """
+        Calcula o score de anomalia de uma nova curva em relação à referência.
+
+        Parâmetros:
+          x_new, y_new : arrays da curva a avaliar
+          sigma_thr    : limiar em número de desvios padrão (padrão 3σ)
+          reference    : curva de referência ponto a ponto na grade X.
+                         Se None, usa self.mean (golden mean).
+                         Se fornecida (curva perfeita), é o centro da janela.
+          ref_std      : desvio padrão ponto a ponto a usar na normalização.
+                         Se None, usa self.std (desvio da população OK).
+                         Se fornecido, deve ser o desvio das curvas OK em
+                         relação à curva perfeita (calculado em _avaliar_anomalia).
+
+        Retorno (dict):
+          score        : 0–100, quanto maior mais anômalo
+          outside_frac : fração de pontos além do limiar σ
+          verdict      : "OK" se score < 40 E outside_frac < 5%, senão "NOK"
+          z            : array de z-scores ponto a ponto (para debug)
+          mask         : máscara booleana dos pontos válidos na grade X
+        """
+        # Ordena e remove X duplicados da curva de teste
         idx  = np.argsort(x_new)
         xu, ui = np.unique(x_new[idx], return_index=True)
         yu = y_new[idx][ui]
+
+        # Limita a avaliação à faixa X coberta pela curva de teste
         mask = (self.x_grid >= xu.min()) & (self.x_grid <= xu.max())
         if mask.sum() < 10:
             return dict(score=None, outside_frac=None, msg="Fora da faixa de X")
+
+        # Interpola a curva de teste na grade X da golden curve
         f   = interp1d(xu, yu, kind="linear",
                        bounds_error=False, fill_value="extrapolate")
         y_i = f(self.x_grid[mask])
+
+        # Centro da janela: curva perfeita (se fornecida) ou golden mean
         mu  = (reference[mask] if reference is not None else self.mean[mask])
-        sg  = self.std[mask]
-        sg  = np.where(sg < 1e-9, 1e-9, sg)
+
+        # Largura da janela: desvio relativo à perfeita (se fornecido) ou da população
+        sg  = (ref_std[mask] if ref_std is not None else self.std[mask])
+        sg  = np.where(sg < 1e-9, 1e-9, sg)   # evita divisão por zero
+
+        # z-score: distância normalizada de cada ponto ao centro da janela
         z   = np.abs(y_i - mu) / sg
+
+        # Fração de pontos além do limiar e score global (0–100)
         outside = (z > sigma_thr).mean()
         score   = float(np.clip(z.mean() / sigma_thr * 50, 0, 100))
+
         verdict = "OK" if outside < 0.05 and score < 40 else "NOK"
         return dict(score=score, outside_frac=outside,
                     verdict=verdict, z=z, mask=mask)
@@ -3216,44 +3309,98 @@ class AbaGoldenCurve(tk.Frame):
         self._cv_st.draw()
 
     def _avaliar_anomalia(self):
+        """
+        Avalia cada curva de teste carregada e exibe o resultado na sub-aba Anomalia.
+
+        Fluxo:
+          1. Verifica pré-condições (golden curve e curvas de teste carregadas)
+          2. Decide qual referência usar (curva perfeita ou golden mean)
+          3. Calcula as bandas estatísticas da janela de aprovação
+          4. Plota as bandas e cada curva de teste com cor OK (verde) / NOK (vermelho)
+          5. Exibe popup com tabela de resultados (score e % fora da banda)
+        """
         if self._analyzer is None:
             messagebox.showwarning("Atencao", "Gere a Golden Curve primeiro."); return
         if not self._test_curves:
             messagebox.showwarning("Atencao", "Carregue pelo menos uma curva de teste."); return
-        p  = self._get_params()
+
+        p  = self._get_params()   # lê os parâmetros atuais do painel (sigma, smooth, etc.)
         az = self._analyzer
         ax = self._ax_an; ax.cla(); self._style_ax(ax)
-        x  = az.x_grid
+        x  = az.x_grid            # grade X comum a todas as curvas (mm)
 
+        # Verifica se o usuário ativou a curva perfeita e se ela está carregada
         use_perfect = (self._use_perfect.get()
                        and self._perfect_curve is not None)
         reference = None
         if use_perfect:
             try:
+                # Interpola a curva perfeita na mesma grade X da golden curve
                 reference = self._perfect_y_on_grid(az)
             except Exception:
-                reference = None
+                reference = None   # se falhar, cai de volta para o modo golden mean
 
-        center = reference if reference is not None else az.mean_smooth
+        # ── Janela de aprovação ────────────────────────────────────────────────
+        # COM curva perfeita ativa:
+        #   - Calcula o desvio de cada curva OK em relação à curva perfeita
+        #     (não à média da população), gerando um σ centrado na perfeita.
+        #   - Aplica filtro gaussiano nos desvios para eliminar picos locais
+        #     causados por curvas OK que têm anomalias em posições específicas
+        #     do curso (ex: pico em 120 mm de uma única curva da população).
+        #   - smooth_s é proporcional ao número de pontos da grade (n_interp // 20),
+        #     garantindo suavização consistente independentemente da resolução.
+        # SEM curva perfeita:
+        #   - Usa a golden mean como centro e o std da população como largura.
+        if reference is not None:
+            smooth_s     = max(az.n_interp // 20, 10)
 
-        ax.fill_between(x, center - az.std, center + az.std,
+            # dev[i, j] = distância da curva OK i em relação à perfeita no ponto j
+            dev          = az.matrix - reference
+
+            # Desvio padrão suavizado das curvas OK em relação à perfeita
+            std_from_ref = gaussian_filter1d(np.std(dev, axis=0), sigma=smooth_s)
+
+            # Percentis suavizados — definem a banda P5–P95 centrada na perfeita
+            p05_band     = reference + gaussian_filter1d(np.percentile(dev,  5, axis=0), sigma=smooth_s)
+            p95_band     = reference + gaussian_filter1d(np.percentile(dev, 95, axis=0), sigma=smooth_s)
+
+            center       = reference      # curva perfeita é o eixo central da janela
+            band_std     = std_from_ref   # largura = dispersão das OK em torno da perfeita
+        else:
+            std_from_ref = None
+            p05_band     = az.p05         # percentis diretos da população golden
+            p95_band     = az.p95
+            center       = az.mean_smooth # golden mean suavizada como centro
+            band_std     = az.std         # desvio padrão da população golden
+
+        # ── Plotagem das bandas ────────────────────────────────────────────────
+        # Banda dourada: centro ± 1σ — janela de aprovação principal
+        ax.fill_between(x, center - band_std, center + band_std,
                         color=GOLD, alpha=0.15, label="ref ± 1σ")
-        ax.fill_between(x, az.p05, az.p95,
-                        color=ACCENT, alpha=0.08, label="P5–P95 (golden)")
-        ax.plot(x, az.mean_smooth, color=GOLD, lw=1.5, zorder=10,
-                ls="--", alpha=0.6, label="Golden mean")
+
+        # Banda azul: P5–P95 — indica o intervalo onde 90% das curvas OK se encontram
+        ax.fill_between(x, p05_band, p95_band,
+                        color=ACCENT, alpha=0.08,
+                        label="P5–P95 (perfeita)" if reference is not None else "P5–P95 (golden)")
+
+        # Linha de referência central: curva perfeita (branca) ou golden mean (dourada)
         if reference is not None:
             ax.plot(x, reference, color="#ffffff", lw=2.2, zorder=12,
                     label=f"Curva perfeita: {self._perfect_name[:22]}")
+        else:
+            ax.plot(x, az.mean_smooth, color=GOLD, lw=1.5, zorder=10,
+                    ls="--", alpha=0.6, label="Golden mean")
 
+        # Paletas de cor para curvas OK (tons de verde) e NOK (tons de vermelho/laranja)
         ok_pal  = ["#2ecc71", "#27ae60", "#1abc9c", "#52be80"]
         nok_pal = ["#e74c3c", "#c0392b", "#e67e22", "#d35400"]
         ok_i = nok_i = 0
 
         resultados = []
         for xt, yt, name in self._test_curves:
+            # Calcula o score da curva usando a referência e o std adequados ao modo ativo
             res     = az.anomaly_score(xt, yt, sigma_thr=p["sigma"],
-                                       reference=reference)
+                                       reference=reference, ref_std=std_from_ref)
             verdict = res.get("verdict", "N/A")
             score   = res.get("score")
             out_f   = res.get("outside_frac")
@@ -3888,27 +4035,52 @@ class App(tk.Tk):
         h2("5.1 Conceito")
         body("Aprende o comportamento nominal de um press-fit a partir de N curvas OK,")
         body("gerando curva teorica media com banda de confianca calibrada.")
-        h2("5.2 Algoritmo")
+        body("Permite tambem usar uma Curva Perfeita como eixo central da janela")
+        body("de aprovacao, tornando a deteccao independente da media da populacao.")
+        h2("5.2 Algoritmo de construcao da Golden Curve")
         bullet([
-            "Grade X = interseccao dos dominios de todas as curvas.",
+            "Grade X = interseccao dos dominios de todas as curvas OK carregadas.",
             "Cada curva interpolada linearmente na grade (scipy.interp1d, 500 pts).",
             "Estatisticas ponto a ponto: mean, std, median, P05/P95, P25/P75.",
+            "Curva media suavizada por filtro gaussiano (sigma = parametro Suavizacao).",
             "Ajuste polinomial grau N (padrao 6) por minimos quadrados (numpy.polyfit).",
             "Ajuste spline cubico (scipy.UnivariateSpline, k=3).",
         ])
-        h2("5.3 Score de anomalia")
-        body("  z(x)          = |F_nova(x) - mean(x)| / std(x)")
+        h2("5.3 Score de anomalia — modo Golden Mean (sem curva perfeita)")
+        body("  z(x)          = |F_nova(x) - golden_mean(x)| / std_populacao(x)")
         body("  outside_frac  = mean(z > sigma_thr)   [sigma padrao=3.0]")
         body("  score         = clip( mean(z)/thr * 50, 0, 100 )")
         body("  Veredito OK   se outside_frac < 5% E score < 40")
-        h2("5.4 Como usar")
+        body("  Banda ref+-1s : golden_mean +- std_populacao")
+        body("  Banda P5-P95  : percentis diretos da populacao OK")
+        h2("5.4 Score de anomalia — modo Curva Perfeita (NOVO)")
+        body("Quando uma Curva Perfeita e carregada e ativada, TODA a janela de")
+        body("aprovacao passa a ser ancorada nela, nao na media da populacao:")
+        body("")
+        body("  dev[i,x]      = curvaOK_i(x) - perfeita(x)  [desvio de cada OK]")
+        body("  std_perf(x)   = std(dev[:, x])  suavizado com filtro gaussiano")
+        body("  z(x)          = |F_nova(x) - perfeita(x)| / std_perf(x)")
+        body("  outside_frac  = mean(z > sigma_thr)")
+        body("  score         = clip( mean(z)/thr * 50, 0, 100 )")
+        body("  Veredito OK   se outside_frac < 5% E score < 40")
+        body("")
+        body("  Banda ref+-1s : perfeita +- std_perf  (suavizada, sem picos)")
+        body("  Banda P5-P95  : perfeita + percentis(dev, 5/95)  (suavizados)")
+        body("")
+        body("  Suavizacao do std: sigma = max(n_pontos_grade / 20, 10)")
+        body("  Isso elimina picos locais causados por curvas OK que possuem")
+        body("  anomalias em posicoes especificas do curso.")
+        h2("5.5 Como usar")
         bullet([
             "1. Carregar curvas OK via Adicionar XML/CSV ou Importar OK do Comparador.",
-            "2. (Opcional) Filtrar por Ponto/Ano.",
-            "3. Ajustar grau do polinomio, sigma, suavizacao, N pontos.",
+            "2. (Opcional) Filtrar por Ponto/Ano para segmentar o conjunto.",
+            "3. Ajustar grau do polinomio, sigma anomalia, suavizacao, N pontos.",
             "4. Clicar GERAR GOLDEN CURVE.",
-            "5. Para anomalia: carregar curva(s) de teste -> Avaliar anomalia.",
-            "6. Exportar coeficientes CSV, PDF ou PNG.",
+            "5. (Opcional) Adicionar Curva Perfeita e marcar 'Usar na deteccao'.",
+            "   Com curva perfeita: janela centrada nela, std calculado relativo a ela.",
+            "   Sem curva perfeita: janela centrada na golden mean da populacao.",
+            "6. Carregar curva(s) de teste -> Avaliar anomalia.",
+            "7. Exportar coeficientes CSV, PDF ou PNG.",
         ])
 
         h1("6. ARQUITETURA")

@@ -1,7 +1,7 @@
 ; Inno Setup Script - BCI STLA
 
 #define AppName      "BCI STLA"
-#define AppVersion   "1.0.0"
+#define AppVersion   "1.0.2"
 #define AppPublisher "Bruno Bernardinetti"
 #define AppExeName   "BCI_STLA.exe"
 #define AppURL       "https://www.stellantis.com"
