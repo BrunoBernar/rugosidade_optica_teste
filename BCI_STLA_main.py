@@ -616,13 +616,12 @@ class ScrollableFrame(tk.Frame):
     Use self.inner para colocar widgets dentro.
     """
     def __init__(self, parent, **kw):
-        super().__init__(parent, bg=BG, **kw)
+        bg_color = kw.pop("bg", BG)
+        super().__init__(parent, bg=bg_color, **kw)
 
-        # Canvas principal (area que vai rolar)
-        self._canvas = tk.Canvas(self, bg=BG, highlightthickness=0)
+        self._canvas = tk.Canvas(self, bg=bg_color, highlightthickness=0)
         self._canvas.pack(side="left", fill="both", expand=True)
 
-        # Scrollbar vertical
         sb = tk.Scrollbar(self, orient="vertical",
                           command=self._canvas.yview,
                           bg=BG2, troughcolor=BG3,
@@ -630,57 +629,52 @@ class ScrollableFrame(tk.Frame):
         sb.pack(side="right", fill="y")
         self._canvas.configure(yscrollcommand=sb.set)
 
-        # Frame interno onde o conteudo fica
-        self.inner = tk.Frame(self._canvas, bg=BG)
+        self.inner = tk.Frame(self._canvas, bg=bg_color)
         self._win_id = self._canvas.create_window(
             (0, 0), window=self.inner, anchor="nw")
 
-        # Redimensiona a scrollregion quando o conteudo muda
         self.inner.bind("<Configure>", self._on_inner_configure)
-        # Faz o frame interno ocupar toda a largura do canvas
         self._canvas.bind("<Configure>", self._on_canvas_configure)
 
-        # Scroll com roda do mouse (Windows + Linux)
-        self._canvas.bind("<Enter>",  self._bind_mousewheel)
-        self._canvas.bind("<Leave>",  self._unbind_mousewheel)
-        self.inner.bind("<Enter>",    self._bind_mousewheel)
-        self.inner.bind("<Leave>",    self._unbind_mousewheel)
+        # bind_all permanente com add="+" para coexistir entre multiplas instancias.
+        # O handler verifica se o ponteiro esta sobre este canvas antes de rolar,
+        # evitando o bug de Enter/Leave quebrar ao mover entre widgets filhos.
+        self.bind_all("<MouseWheel>", self._on_mousewheel_win,      add="+")
+        self.bind_all("<Button-4>",   self._on_mousewheel_linux_up,  add="+")
+        self.bind_all("<Button-5>",   self._on_mousewheel_linux_down, add="+")
 
     def _on_inner_configure(self, event):
-        """Atualiza a area de scroll quando o conteudo interno muda de tamanho."""
-        self._canvas.configure(
-            scrollregion=self._canvas.bbox("all"))
+        self._canvas.configure(scrollregion=self._canvas.bbox("all"))
 
     def _on_canvas_configure(self, event):
-        """Faz o frame interno ter sempre a mesma largura do canvas."""
         self._canvas.itemconfig(self._win_id, width=event.width)
 
-    def _bind_mousewheel(self, event):
-        """Ativa scroll com roda do mouse ao entrar na area."""
-        self._canvas.bind_all("<MouseWheel>", self._on_mousewheel_win)
-        self._canvas.bind_all("<Button-4>",   self._on_mousewheel_linux_up)
-        self._canvas.bind_all("<Button-5>",   self._on_mousewheel_linux_down)
-
-    def _unbind_mousewheel(self, event):
-        """Desativa scroll com roda do mouse ao sair da area."""
-        self._canvas.unbind_all("<MouseWheel>")
-        self._canvas.unbind_all("<Button-4>")
-        self._canvas.unbind_all("<Button-5>")
+    def _mouse_over(self):
+        """Retorna True se o ponteiro do mouse esta sobre este canvas."""
+        try:
+            px = self._canvas.winfo_pointerx()
+            py = self._canvas.winfo_pointery()
+            cx = self._canvas.winfo_rootx()
+            cy = self._canvas.winfo_rooty()
+            cw = self._canvas.winfo_width()
+            ch = self._canvas.winfo_height()
+            return cx <= px < cx + cw and cy <= py < cy + ch
+        except Exception:
+            return False
 
     def _on_mousewheel_win(self, event):
-        """Scroll Windows/Mac."""
-        self._canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        if self._mouse_over():
+            self._canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def _on_mousewheel_linux_up(self, event):
-        """Scroll Linux — rolar para cima."""
-        self._canvas.yview_scroll(-1, "units")
+        if self._mouse_over():
+            self._canvas.yview_scroll(-1, "units")
 
     def _on_mousewheel_linux_down(self, event):
-        """Scroll Linux — rolar para baixo."""
-        self._canvas.yview_scroll(1, "units")
+        if self._mouse_over():
+            self._canvas.yview_scroll(1, "units")
 
     def scroll_top(self):
-        """Volta o scroll para o topo."""
         self._canvas.yview_moveto(0)
 
 
@@ -2110,10 +2104,29 @@ class AbaXMLComparator(tk.Frame):
         outer = tk.Frame(self, bg=BG)
         outer.pack(fill="both", expand=True)
 
-        # ── Painel esquerdo ──────────────────────────────────────────────────
-        left = tk.Frame(outer, bg=_C_PANEL, width=300)
-        left.pack(side="left", fill="y", padx=(8,0), pady=8)
-        left.pack_propagate(False)
+        # Scrollbar na borda direita — controla apenas o painel esquerdo
+        _sb = tk.Scrollbar(outer, orient="vertical", bg=BG2, troughcolor=BG3,
+                           activebackground=ACCENT)
+        _sb.pack(side="right", fill="y")
+
+        # ── Painel esquerdo como canvas rolável ──────────────────────────────
+        _lc = tk.Canvas(outer, bg=_C_PANEL, width=300, highlightthickness=0,
+                        yscrollcommand=_sb.set)
+        _lc.pack(side="left", fill="y", padx=(8, 0), pady=8)
+        _sb.config(command=_lc.yview)
+        left = tk.Frame(_lc, bg=_C_PANEL)
+        _lc_win = _lc.create_window((0, 0), window=left, anchor="nw")
+        left.bind("<Configure>", lambda _: _lc.configure(scrollregion=_lc.bbox("all")))
+        _lc.bind("<Configure>", lambda e: _lc.itemconfig(_lc_win, width=e.width))
+        def _xml_mw(event):
+            try:
+                px, py = _lc.winfo_pointerx(), _lc.winfo_pointery()
+                cx, cy = _lc.winfo_rootx(), _lc.winfo_rooty()
+                if cx <= px < cx + _lc.winfo_width() and cy <= py < cy + _lc.winfo_height():
+                    _lc.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except Exception:
+                pass
+        _lc.bind_all("<MouseWheel>", _xml_mw, add="+")
 
         tk.Label(left, text="Force Curve Comparator",
                  bg=_C_PANEL, fg=_C_SEL,
@@ -2635,7 +2648,8 @@ class GoldenCurveAnalyzer:
         return dict(spl=spl, y_fit=y_fit, r2=r2)
 
     def anomaly_score(self, x_new: np.ndarray, y_new: np.ndarray,
-                      sigma_thr: float = 3.0) -> dict:
+                      sigma_thr: float = 3.0,
+                      reference: np.ndarray | None = None) -> dict:
         idx  = np.argsort(x_new)
         xu, ui = np.unique(x_new[idx], return_index=True)
         yu = y_new[idx][ui]
@@ -2645,7 +2659,8 @@ class GoldenCurveAnalyzer:
         f   = interp1d(xu, yu, kind="linear",
                        bounds_error=False, fill_value="extrapolate")
         y_i = f(self.x_grid[mask])
-        mu  = self.mean[mask]; sg = self.std[mask]
+        mu  = (reference[mask] if reference is not None else self.mean[mask])
+        sg  = self.std[mask]
         sg  = np.where(sg < 1e-9, 1e-9, sg)
         z   = np.abs(y_i - mu) / sg
         outside = (z > sigma_thr).mean()
@@ -2670,6 +2685,9 @@ class AbaGoldenCurve(tk.Frame):
         self._poly_result: dict  | None = None
         self._spl_result:  dict  | None = None
         self._test_curves: list  = []
+        self._perfect_curve: tuple | None = None
+        self._perfect_name: str = ""
+        self._use_perfect = tk.BooleanVar(value=True)
         self._build()
 
     def _btn(self, parent, text, cmd, fg=ACCENT, bg=BG2):
@@ -2682,10 +2700,29 @@ class AbaGoldenCurve(tk.Frame):
         root_frame = tk.Frame(self, bg=BG)
         root_frame.pack(fill="both", expand=True)
 
-        # ── painel esquerdo ───────────────────────────────────────────────
-        left = tk.Frame(root_frame, bg=_C_PANEL, width=310)
-        left.pack(side="left", fill="y", padx=(8, 0), pady=8)
-        left.pack_propagate(False)
+        # Scrollbar na borda direita — controla apenas o painel esquerdo
+        _sb = tk.Scrollbar(root_frame, orient="vertical", bg=BG2, troughcolor=BG3,
+                           activebackground=ACCENT)
+        _sb.pack(side="right", fill="y")
+
+        # ── painel esquerdo como canvas rolável ───────────────────────────
+        _lc = tk.Canvas(root_frame, bg=_C_PANEL, width=310, highlightthickness=0,
+                        yscrollcommand=_sb.set)
+        _lc.pack(side="left", fill="y", padx=(8, 0), pady=8)
+        _sb.config(command=_lc.yview)
+        left = tk.Frame(_lc, bg=_C_PANEL)
+        _lc_win = _lc.create_window((0, 0), window=left, anchor="nw")
+        left.bind("<Configure>", lambda _: _lc.configure(scrollregion=_lc.bbox("all")))
+        _lc.bind("<Configure>", lambda e: _lc.itemconfig(_lc_win, width=e.width))
+        def _gc_mw(event):
+            try:
+                px, py = _lc.winfo_pointerx(), _lc.winfo_pointery()
+                cx, cy = _lc.winfo_rootx(), _lc.winfo_rooty()
+                if cx <= px < cx + _lc.winfo_width() and cy <= py < cy + _lc.winfo_height():
+                    _lc.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except Exception:
+                pass
+        _lc.bind_all("<MouseWheel>", _gc_mw, add="+")
 
         tk.Label(left, text="GOLDEN CURVE ANALYZER",
                  bg=_C_PANEL, fg=ACCENT, font=("Courier", 10, "bold"),
@@ -2782,7 +2819,23 @@ class AbaGoldenCurve(tk.Frame):
                   self._analisar, fg=ACCENT, bg="#0a2030").pack(fill="x", padx=8, pady=(0, 4))
         tk.Frame(left, bg=BORDER, height=1).pack(fill="x", padx=8, pady=4)
 
-        tk.Label(left, text="3. DETECCAO DE ANOMALIA",
+        tk.Label(left, text="3. CURVA PERFEITA (IDEAL)",
+                 bg=_C_PANEL, fg="#ffffff", font=FONT_SMALL, pady=6).pack(anchor="w", padx=10)
+        self._btn(left, "📐  Adicionar curva perfeita",
+                  self._add_perfect_curve, fg="#ffffff").pack(fill="x", padx=8, pady=2)
+        self._lbl_perfect = tk.Label(left, text="Nenhuma curva perfeita",
+                                     bg=_C_PANEL, fg=FG_DIM, font=FONT_SMALL)
+        self._lbl_perfect.pack(anchor="w", padx=12)
+        self._btn(left, "🗑  Remover curva perfeita",
+                  self._remove_perfect_curve, fg=FG_DIM).pack(fill="x", padx=8, pady=2)
+        tk.Checkbutton(left, text="Usar na deteccao de anomalia", variable=self._use_perfect,
+                       bg=_C_PANEL, fg=FG_DIM, selectcolor=BG3,
+                       activebackground=_C_PANEL, activeforeground="#ffffff",
+                       font=FONT_SMALL, command=self._replot
+                       ).pack(anchor="w", padx=12, pady=(2, 4))
+        tk.Frame(left, bg=BORDER, height=1).pack(fill="x", padx=8, pady=4)
+
+        tk.Label(left, text="4. DETECCAO DE ANOMALIA",
                  bg=_C_PANEL, fg=RED, font=FONT_SMALL, pady=6).pack(anchor="w", padx=10)
         self._btn(left, "➕  Carregar curva(s) para teste",
                   self._add_test_curves, fg=RED).pack(fill="x", padx=8, pady=2)
@@ -2969,6 +3022,37 @@ class AbaGoldenCurve(tk.Frame):
                          ha="center", va="center", color="#2a3a44", fontsize=9)
         self._cv_an.draw()
 
+    def _add_perfect_curve(self):
+        path = filedialog.askopenfilename(
+            title="Selecionar curva perfeita (XML ou CSV)",
+            filetypes=[("Suportados", "*.xml *.csv"), ("Todos", "*.*")])
+        if not path:
+            return
+        try:
+            x, y = parse_curve_file(path)
+            self._perfect_curve = (x, y)
+            self._perfect_name = os.path.basename(path)
+            self._lbl_perfect.config(text=f"✔  {self._perfect_name[:28]}", fg="#ffffff")
+            self._status.set(f"Curva perfeita: {self._perfect_name}")
+            self._replot()
+        except Exception as e:
+            messagebox.showerror("Erro ao carregar curva perfeita", str(e))
+
+    def _remove_perfect_curve(self):
+        self._perfect_curve = None
+        self._perfect_name = ""
+        self._lbl_perfect.config(text="Nenhuma curva perfeita", fg=FG_DIM)
+        self._status.set("Curva perfeita removida.")
+        self._replot()
+
+    def _perfect_y_on_grid(self, az):
+        x, y = self._perfect_curve
+        idx = np.argsort(x)
+        xu, ui = np.unique(x[idx], return_index=True)
+        yu = y[idx][ui]
+        f = interp1d(xu, yu, bounds_error=False, fill_value="extrapolate")
+        return f(az.x_grid)
+
     def _gc_update_filter_options(self):
         mps   = sorted(set(filter(None, (_extract_mp(p)   for p in self._files))))
         years = sorted(set(filter(None, (_extract_year(p) for p in self._files))))
@@ -3068,6 +3152,14 @@ class AbaGoldenCurve(tk.Frame):
             ax.plot(x, sr["y_fit"], color=GREEN, lw=1.8, ls=":", zorder=17,
                     label=f"Spline cubico  R²={sr['r2']:.4f}")
 
+        if self._perfect_curve is not None:
+            try:
+                yp = self._perfect_y_on_grid(az)
+                ax.plot(x, yp, color="#ffffff", lw=2.2, zorder=25,
+                        label=f"Curva perfeita: {self._perfect_name[:22]}")
+            except Exception:
+                pass
+
         ax.set_xlabel("Curso [mm]", color=FG_DIM, fontsize=9)
         ax.set_ylabel("Forca [kN]", color=FG_DIM, fontsize=9)
         ax.set_title(
@@ -3133,11 +3225,26 @@ class AbaGoldenCurve(tk.Frame):
         ax = self._ax_an; ax.cla(); self._style_ax(ax)
         x  = az.x_grid
 
-        ax.fill_between(x, az.mean - az.std, az.mean + az.std,
-                        color=GOLD, alpha=0.15, label="mean ± 1σ (golden)")
+        use_perfect = (self._use_perfect.get()
+                       and self._perfect_curve is not None)
+        reference = None
+        if use_perfect:
+            try:
+                reference = self._perfect_y_on_grid(az)
+            except Exception:
+                reference = None
+
+        center = reference if reference is not None else az.mean_smooth
+
+        ax.fill_between(x, center - az.std, center + az.std,
+                        color=GOLD, alpha=0.15, label="ref ± 1σ")
         ax.fill_between(x, az.p05, az.p95,
                         color=ACCENT, alpha=0.08, label="P5–P95 (golden)")
-        ax.plot(x, az.mean_smooth, color=GOLD, lw=2.0, zorder=10, label="Golden mean")
+        ax.plot(x, az.mean_smooth, color=GOLD, lw=1.5, zorder=10,
+                ls="--", alpha=0.6, label="Golden mean")
+        if reference is not None:
+            ax.plot(x, reference, color="#ffffff", lw=2.2, zorder=12,
+                    label=f"Curva perfeita: {self._perfect_name[:22]}")
 
         ok_pal  = ["#2ecc71", "#27ae60", "#1abc9c", "#52be80"]
         nok_pal = ["#e74c3c", "#c0392b", "#e67e22", "#d35400"]
@@ -3145,7 +3252,8 @@ class AbaGoldenCurve(tk.Frame):
 
         resultados = []
         for xt, yt, name in self._test_curves:
-            res     = az.anomaly_score(xt, yt, sigma_thr=p["sigma"])
+            res     = az.anomaly_score(xt, yt, sigma_thr=p["sigma"],
+                                       reference=reference)
             verdict = res.get("verdict", "N/A")
             score   = res.get("score")
             out_f   = res.get("outside_frac")
@@ -3170,8 +3278,9 @@ class AbaGoldenCurve(tk.Frame):
 
         ax.set_xlabel("Curso [mm]", color=FG_DIM, fontsize=9)
         ax.set_ylabel("Forca [kN]", color=FG_DIM, fontsize=9)
+        ref_label = "  |  ref=curva perfeita" if reference is not None else ""
         ax.set_title(
-            f"Anomalia  |  σ_thr={p['sigma']}  |  "
+            f"Anomalia  |  σ_thr={p['sigma']}{ref_label}  |  "
             f"{sum(1 for _,v,_,_ in resultados if v=='OK')} OK  /  "
             f"{sum(1 for _,v,_,_ in resultados if v=='NOK')} NOK",
             color=FG_DIM, fontsize=9, pad=6)
