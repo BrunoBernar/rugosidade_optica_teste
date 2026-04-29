@@ -584,13 +584,12 @@ class ScrollableFrame(tk.Frame):
     Use self.inner para colocar widgets dentro.
     """
     def __init__(self, parent, **kw):
-        super().__init__(parent, bg=BG, **kw)
+        bg_color = kw.pop("bg", BG)
+        super().__init__(parent, bg=bg_color, **kw)
 
-        # Canvas principal (area que vai rolar)
-        self._canvas = tk.Canvas(self, bg=BG, highlightthickness=0)
+        self._canvas = tk.Canvas(self, bg=bg_color, highlightthickness=0)
         self._canvas.pack(side="left", fill="both", expand=True)
 
-        # Scrollbar vertical
         sb = tk.Scrollbar(self, orient="vertical",
                           command=self._canvas.yview,
                           bg=BG2, troughcolor=BG3,
@@ -598,57 +597,52 @@ class ScrollableFrame(tk.Frame):
         sb.pack(side="right", fill="y")
         self._canvas.configure(yscrollcommand=sb.set)
 
-        # Frame interno onde o conteudo fica
-        self.inner = tk.Frame(self._canvas, bg=BG)
+        self.inner = tk.Frame(self._canvas, bg=bg_color)
         self._win_id = self._canvas.create_window(
             (0, 0), window=self.inner, anchor="nw")
 
-        # Redimensiona a scrollregion quando o conteudo muda
         self.inner.bind("<Configure>", self._on_inner_configure)
-        # Faz o frame interno ocupar toda a largura do canvas
         self._canvas.bind("<Configure>", self._on_canvas_configure)
 
-        # Scroll com roda do mouse (Windows + Linux)
-        self._canvas.bind("<Enter>",  self._bind_mousewheel)
-        self._canvas.bind("<Leave>",  self._unbind_mousewheel)
-        self.inner.bind("<Enter>",    self._bind_mousewheel)
-        self.inner.bind("<Leave>",    self._unbind_mousewheel)
+        # bind_all permanente com add="+" para coexistir entre multiplas instancias.
+        # O handler verifica se o ponteiro esta sobre este canvas antes de rolar,
+        # evitando o bug de Enter/Leave quebrar ao mover entre widgets filhos.
+        self.bind_all("<MouseWheel>", self._on_mousewheel_win,      add="+")
+        self.bind_all("<Button-4>",   self._on_mousewheel_linux_up,  add="+")
+        self.bind_all("<Button-5>",   self._on_mousewheel_linux_down, add="+")
 
     def _on_inner_configure(self, event):
-        """Atualiza a area de scroll quando o conteudo interno muda de tamanho."""
-        self._canvas.configure(
-            scrollregion=self._canvas.bbox("all"))
+        self._canvas.configure(scrollregion=self._canvas.bbox("all"))
 
     def _on_canvas_configure(self, event):
-        """Faz o frame interno ter sempre a mesma largura do canvas."""
         self._canvas.itemconfig(self._win_id, width=event.width)
 
-    def _bind_mousewheel(self, event):
-        """Ativa scroll com roda do mouse ao entrar na area."""
-        self._canvas.bind_all("<MouseWheel>", self._on_mousewheel_win)
-        self._canvas.bind_all("<Button-4>",   self._on_mousewheel_linux_up)
-        self._canvas.bind_all("<Button-5>",   self._on_mousewheel_linux_down)
-
-    def _unbind_mousewheel(self, event):
-        """Desativa scroll com roda do mouse ao sair da area."""
-        self._canvas.unbind_all("<MouseWheel>")
-        self._canvas.unbind_all("<Button-4>")
-        self._canvas.unbind_all("<Button-5>")
+    def _mouse_over(self):
+        """Retorna True se o ponteiro do mouse esta sobre este canvas."""
+        try:
+            px = self._canvas.winfo_pointerx()
+            py = self._canvas.winfo_pointery()
+            cx = self._canvas.winfo_rootx()
+            cy = self._canvas.winfo_rooty()
+            cw = self._canvas.winfo_width()
+            ch = self._canvas.winfo_height()
+            return cx <= px < cx + cw and cy <= py < cy + ch
+        except Exception:
+            return False
 
     def _on_mousewheel_win(self, event):
-        """Scroll Windows/Mac."""
-        self._canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        if self._mouse_over():
+            self._canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def _on_mousewheel_linux_up(self, event):
-        """Scroll Linux — rolar para cima."""
-        self._canvas.yview_scroll(-1, "units")
+        if self._mouse_over():
+            self._canvas.yview_scroll(-1, "units")
 
     def _on_mousewheel_linux_down(self, event):
-        """Scroll Linux — rolar para baixo."""
-        self._canvas.yview_scroll(1, "units")
+        if self._mouse_over():
+            self._canvas.yview_scroll(1, "units")
 
     def scroll_top(self):
-        """Volta o scroll para o topo."""
         self._canvas.yview_moveto(0)
 
 
@@ -2078,10 +2072,29 @@ class AbaXMLComparator(tk.Frame):
         outer = tk.Frame(self, bg=BG)
         outer.pack(fill="both", expand=True)
 
-        # ── Painel esquerdo ──────────────────────────────────────────────────
-        left = tk.Frame(outer, bg=_C_PANEL, width=300)
-        left.pack(side="left", fill="y", padx=(8,0), pady=8)
-        left.pack_propagate(False)
+        # Scrollbar na borda direita — controla apenas o painel esquerdo
+        _sb = tk.Scrollbar(outer, orient="vertical", bg=BG2, troughcolor=BG3,
+                           activebackground=ACCENT)
+        _sb.pack(side="right", fill="y")
+
+        # ── Painel esquerdo como canvas rolável ──────────────────────────────
+        _lc = tk.Canvas(outer, bg=_C_PANEL, width=300, highlightthickness=0,
+                        yscrollcommand=_sb.set)
+        _lc.pack(side="left", fill="y", padx=(8, 0), pady=8)
+        _sb.config(command=_lc.yview)
+        left = tk.Frame(_lc, bg=_C_PANEL)
+        _lc_win = _lc.create_window((0, 0), window=left, anchor="nw")
+        left.bind("<Configure>", lambda _: _lc.configure(scrollregion=_lc.bbox("all")))
+        _lc.bind("<Configure>", lambda e: _lc.itemconfig(_lc_win, width=e.width))
+        def _xml_mw(event):
+            try:
+                px, py = _lc.winfo_pointerx(), _lc.winfo_pointery()
+                cx, cy = _lc.winfo_rootx(), _lc.winfo_rooty()
+                if cx <= px < cx + _lc.winfo_width() and cy <= py < cy + _lc.winfo_height():
+                    _lc.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except Exception:
+                pass
+        _lc.bind_all("<MouseWheel>", _xml_mw, add="+")
 
         tk.Label(left, text="Force Curve Comparator",
                  bg=_C_PANEL, fg=_C_SEL,
@@ -2650,10 +2663,29 @@ class AbaGoldenCurve(tk.Frame):
         root_frame = tk.Frame(self, bg=BG)
         root_frame.pack(fill="both", expand=True)
 
-        # ── painel esquerdo ───────────────────────────────────────────────
-        left = tk.Frame(root_frame, bg=_C_PANEL, width=310)
-        left.pack(side="left", fill="y", padx=(8, 0), pady=8)
-        left.pack_propagate(False)
+        # Scrollbar na borda direita — controla apenas o painel esquerdo
+        _sb = tk.Scrollbar(root_frame, orient="vertical", bg=BG2, troughcolor=BG3,
+                           activebackground=ACCENT)
+        _sb.pack(side="right", fill="y")
+
+        # ── painel esquerdo como canvas rolável ───────────────────────────
+        _lc = tk.Canvas(root_frame, bg=_C_PANEL, width=310, highlightthickness=0,
+                        yscrollcommand=_sb.set)
+        _lc.pack(side="left", fill="y", padx=(8, 0), pady=8)
+        _sb.config(command=_lc.yview)
+        left = tk.Frame(_lc, bg=_C_PANEL)
+        _lc_win = _lc.create_window((0, 0), window=left, anchor="nw")
+        left.bind("<Configure>", lambda _: _lc.configure(scrollregion=_lc.bbox("all")))
+        _lc.bind("<Configure>", lambda e: _lc.itemconfig(_lc_win, width=e.width))
+        def _gc_mw(event):
+            try:
+                px, py = _lc.winfo_pointerx(), _lc.winfo_pointery()
+                cx, cy = _lc.winfo_rootx(), _lc.winfo_rooty()
+                if cx <= px < cx + _lc.winfo_width() and cy <= py < cy + _lc.winfo_height():
+                    _lc.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except Exception:
+                pass
+        _lc.bind_all("<MouseWheel>", _gc_mw, add="+")
 
         tk.Label(left, text="GOLDEN CURVE ANALYZER",
                  bg=_C_PANEL, fg=ACCENT, font=("Courier", 10, "bold"),
