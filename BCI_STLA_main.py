@@ -2616,7 +2616,8 @@ class GoldenCurveAnalyzer:
         return dict(spl=spl, y_fit=y_fit, r2=r2)
 
     def anomaly_score(self, x_new: np.ndarray, y_new: np.ndarray,
-                      sigma_thr: float = 3.0) -> dict:
+                      sigma_thr: float = 3.0,
+                      reference: np.ndarray | None = None) -> dict:
         idx  = np.argsort(x_new)
         xu, ui = np.unique(x_new[idx], return_index=True)
         yu = y_new[idx][ui]
@@ -2626,7 +2627,8 @@ class GoldenCurveAnalyzer:
         f   = interp1d(xu, yu, kind="linear",
                        bounds_error=False, fill_value="extrapolate")
         y_i = f(self.x_grid[mask])
-        mu  = self.mean[mask]; sg = self.std[mask]
+        mu  = (reference[mask] if reference is not None else self.mean[mask])
+        sg  = self.std[mask]
         sg  = np.where(sg < 1e-9, 1e-9, sg)
         z   = np.abs(y_i - mu) / sg
         outside = (z > sigma_thr).mean()
@@ -2651,6 +2653,9 @@ class AbaGoldenCurve(tk.Frame):
         self._poly_result: dict  | None = None
         self._spl_result:  dict  | None = None
         self._test_curves: list  = []
+        self._perfect_curve: tuple | None = None
+        self._perfect_name: str = ""
+        self._use_perfect = tk.BooleanVar(value=True)
         self._build()
 
     def _btn(self, parent, text, cmd, fg=ACCENT, bg=BG2):
@@ -2782,7 +2787,23 @@ class AbaGoldenCurve(tk.Frame):
                   self._analisar, fg=ACCENT, bg="#0a2030").pack(fill="x", padx=8, pady=(0, 4))
         tk.Frame(left, bg=BORDER, height=1).pack(fill="x", padx=8, pady=4)
 
-        tk.Label(left, text="3. DETECCAO DE ANOMALIA",
+        tk.Label(left, text="3. CURVA PERFEITA (IDEAL)",
+                 bg=_C_PANEL, fg="#ffffff", font=FONT_SMALL, pady=6).pack(anchor="w", padx=10)
+        self._btn(left, "📐  Adicionar curva perfeita",
+                  self._add_perfect_curve, fg="#ffffff").pack(fill="x", padx=8, pady=2)
+        self._lbl_perfect = tk.Label(left, text="Nenhuma curva perfeita",
+                                     bg=_C_PANEL, fg=FG_DIM, font=FONT_SMALL)
+        self._lbl_perfect.pack(anchor="w", padx=12)
+        self._btn(left, "🗑  Remover curva perfeita",
+                  self._remove_perfect_curve, fg=FG_DIM).pack(fill="x", padx=8, pady=2)
+        tk.Checkbutton(left, text="Usar na deteccao de anomalia", variable=self._use_perfect,
+                       bg=_C_PANEL, fg=FG_DIM, selectcolor=BG3,
+                       activebackground=_C_PANEL, activeforeground="#ffffff",
+                       font=FONT_SMALL, command=self._replot
+                       ).pack(anchor="w", padx=12, pady=(2, 4))
+        tk.Frame(left, bg=BORDER, height=1).pack(fill="x", padx=8, pady=4)
+
+        tk.Label(left, text="4. DETECCAO DE ANOMALIA",
                  bg=_C_PANEL, fg=RED, font=FONT_SMALL, pady=6).pack(anchor="w", padx=10)
         self._btn(left, "➕  Carregar curva(s) para teste",
                   self._add_test_curves, fg=RED).pack(fill="x", padx=8, pady=2)
@@ -2969,6 +2990,37 @@ class AbaGoldenCurve(tk.Frame):
                          ha="center", va="center", color="#2a3a44", fontsize=9)
         self._cv_an.draw()
 
+    def _add_perfect_curve(self):
+        path = filedialog.askopenfilename(
+            title="Selecionar curva perfeita (XML ou CSV)",
+            filetypes=[("Suportados", "*.xml *.csv"), ("Todos", "*.*")])
+        if not path:
+            return
+        try:
+            x, y = parse_curve_file(path)
+            self._perfect_curve = (x, y)
+            self._perfect_name = os.path.basename(path)
+            self._lbl_perfect.config(text=f"✔  {self._perfect_name[:28]}", fg="#ffffff")
+            self._status.set(f"Curva perfeita: {self._perfect_name}")
+            self._replot()
+        except Exception as e:
+            messagebox.showerror("Erro ao carregar curva perfeita", str(e))
+
+    def _remove_perfect_curve(self):
+        self._perfect_curve = None
+        self._perfect_name = ""
+        self._lbl_perfect.config(text="Nenhuma curva perfeita", fg=FG_DIM)
+        self._status.set("Curva perfeita removida.")
+        self._replot()
+
+    def _perfect_y_on_grid(self, az):
+        x, y = self._perfect_curve
+        idx = np.argsort(x)
+        xu, ui = np.unique(x[idx], return_index=True)
+        yu = y[idx][ui]
+        f = interp1d(xu, yu, bounds_error=False, fill_value="extrapolate")
+        return f(az.x_grid)
+
     def _gc_update_filter_options(self):
         mps   = sorted(set(filter(None, (_extract_mp(p)   for p in self._files))))
         years = sorted(set(filter(None, (_extract_year(p) for p in self._files))))
@@ -3068,6 +3120,14 @@ class AbaGoldenCurve(tk.Frame):
             ax.plot(x, sr["y_fit"], color=GREEN, lw=1.8, ls=":", zorder=17,
                     label=f"Spline cubico  R²={sr['r2']:.4f}")
 
+        if self._perfect_curve is not None:
+            try:
+                yp = self._perfect_y_on_grid(az)
+                ax.plot(x, yp, color="#ffffff", lw=2.2, zorder=25,
+                        label=f"Curva perfeita: {self._perfect_name[:22]}")
+            except Exception:
+                pass
+
         ax.set_xlabel("Curso [mm]", color=FG_DIM, fontsize=9)
         ax.set_ylabel("Forca [kN]", color=FG_DIM, fontsize=9)
         ax.set_title(
@@ -3133,11 +3193,26 @@ class AbaGoldenCurve(tk.Frame):
         ax = self._ax_an; ax.cla(); self._style_ax(ax)
         x  = az.x_grid
 
-        ax.fill_between(x, az.mean - az.std, az.mean + az.std,
-                        color=GOLD, alpha=0.15, label="mean ± 1σ (golden)")
+        use_perfect = (self._use_perfect.get()
+                       and self._perfect_curve is not None)
+        reference = None
+        if use_perfect:
+            try:
+                reference = self._perfect_y_on_grid(az)
+            except Exception:
+                reference = None
+
+        center = reference if reference is not None else az.mean_smooth
+
+        ax.fill_between(x, center - az.std, center + az.std,
+                        color=GOLD, alpha=0.15, label="ref ± 1σ")
         ax.fill_between(x, az.p05, az.p95,
                         color=ACCENT, alpha=0.08, label="P5–P95 (golden)")
-        ax.plot(x, az.mean_smooth, color=GOLD, lw=2.0, zorder=10, label="Golden mean")
+        ax.plot(x, az.mean_smooth, color=GOLD, lw=1.5, zorder=10,
+                ls="--", alpha=0.6, label="Golden mean")
+        if reference is not None:
+            ax.plot(x, reference, color="#ffffff", lw=2.2, zorder=12,
+                    label=f"Curva perfeita: {self._perfect_name[:22]}")
 
         ok_pal  = ["#2ecc71", "#27ae60", "#1abc9c", "#52be80"]
         nok_pal = ["#e74c3c", "#c0392b", "#e67e22", "#d35400"]
@@ -3145,7 +3220,8 @@ class AbaGoldenCurve(tk.Frame):
 
         resultados = []
         for xt, yt, name in self._test_curves:
-            res     = az.anomaly_score(xt, yt, sigma_thr=p["sigma"])
+            res     = az.anomaly_score(xt, yt, sigma_thr=p["sigma"],
+                                       reference=reference)
             verdict = res.get("verdict", "N/A")
             score   = res.get("score")
             out_f   = res.get("outside_frac")
@@ -3170,8 +3246,9 @@ class AbaGoldenCurve(tk.Frame):
 
         ax.set_xlabel("Curso [mm]", color=FG_DIM, fontsize=9)
         ax.set_ylabel("Forca [kN]", color=FG_DIM, fontsize=9)
+        ref_label = "  |  ref=curva perfeita" if reference is not None else ""
         ax.set_title(
-            f"Anomalia  |  σ_thr={p['sigma']}  |  "
+            f"Anomalia  |  σ_thr={p['sigma']}{ref_label}  |  "
             f"{sum(1 for _,v,_,_ in resultados if v=='OK')} OK  /  "
             f"{sum(1 for _,v,_,_ in resultados if v=='NOK')} NOK",
             color=FG_DIM, fontsize=9, pad=6)
