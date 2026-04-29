@@ -293,7 +293,7 @@ def _fetch_all_releases(callback):
 
 
 def _download_and_run_update(release: dict, status_cb):
-    """Tenta baixar o instalador .exe do release asset e executar."""
+    """Baixa o instalador .exe do release asset, reporta progresso e executa."""
     assets = release.get("assets", [])
     exe_asset = next((a for a in assets if a.get("name", "").endswith(".exe")), None)
     if not exe_asset:
@@ -301,16 +301,26 @@ def _download_and_run_update(release: dict, status_cb):
         return
     url  = exe_asset["browser_download_url"]
     name = exe_asset["name"]
+    size = exe_asset.get("size", 0)
     dest = os.path.join(os.environ.get("TEMP", _SCRIPT_DIR), name)
     try:
-        status_cb("downloading")
+        status_cb("downloading:0")
         req = urllib.request.Request(url, headers={"User-Agent": "BCI-KNUCKLE-SOFTWARE"})
         with urllib.request.urlopen(req, timeout=120) as r, open(dest, "wb") as f:
+            downloaded = 0
+            total = int(r.headers.get("Content-Length", size) or 0)
+            last_pct = -1
             while True:
                 chunk = r.read(65536)
                 if not chunk:
                     break
                 f.write(chunk)
+                downloaded += len(chunk)
+                if total > 0:
+                    pct = int(downloaded * 100 / total)
+                    if pct != last_pct:
+                        last_pct = pct
+                        status_cb(f"downloading:{pct}")
         status_cb("done:" + dest)
     except Exception as e:
         status_cb("error:" + str(e))
@@ -398,28 +408,50 @@ class _UpdateMandatory:
                  wraplength=360, justify="left").pack(anchor="w", pady=(2,0))
 
         lbl_status = tk.Label(win, text="", font=("Helvetica", 8), fg=FG_DIM, bg=BG)
-        lbl_status.pack(pady=(0,4))
+        lbl_status.pack(pady=(0, 2))
+
+        # barra de progresso (oculta até iniciar download)
+        pb_var = tk.IntVar(value=0)
+        pb = ttk.Progressbar(win, variable=pb_var, maximum=100, length=360, mode="determinate")
 
         has_asset = bool(self._release.get("assets"))
 
         def _do_download():
             btn_dl.config(state="disabled", text="Baixando...")
             lbl_status.config(text="Conectando ao GitHub...", fg=FG_DIM)
+            pb.pack(pady=(0, 6), padx=20)
+            pb_var.set(0)
+
             def _cb(status):
-                if status == "downloading":
-                    win.after(0, lambda: lbl_status.config(text="Baixando instalador...", fg=FG_DIM))
+                if status.startswith("downloading:"):
+                    pct = int(status.split(":")[1])
+                    win.after(0, lambda p=pct: [
+                        pb_var.set(p),
+                        lbl_status.config(text=f"Baixando instalador...  {p}%", fg=FG_DIM)
+                    ])
                 elif status.startswith("done:"):
                     path = status[5:]
-                    win.after(0, lambda: lbl_status.config(
-                        text="Download concluído! Iniciando instalador...", fg=ACCENT))
-                    win.after(500, lambda: [os.startfile(path), self._root.quit()])
+                    win.after(0, lambda: [
+                        pb_var.set(100),
+                        lbl_status.config(text="Concluído! Iniciando instalador...", fg=ACCENT)
+                    ])
+                    def _launch():
+                        subprocess.Popen([path], shell=False)
+                        self._root.after(800, self._root.destroy)
+                    win.after(600, _launch)
                 elif status == "no_asset":
                     win.after(0, lambda: [
-                        lbl_status.config(text="Instalador não encontrado no release. Abrindo GitHub...", fg=FG_WARN),
+                        pb.pack_forget(),
+                        lbl_status.config(text="Instalador não encontrado. Abrindo GitHub...", fg=FG_WARN),
                         webbrowser.open(self._release.get("html_url", _GH_RELEASES_PAGE))
                     ])
                 else:
-                    win.after(0, lambda: lbl_status.config(text=f"Erro: {status[6:]}", fg=RED))
+                    win.after(0, lambda: [
+                        pb.pack_forget(),
+                        lbl_status.config(text=f"Erro: {status[6:]}", fg=RED),
+                        btn_dl.config(state="normal", text="Tentar novamente")
+                    ])
+
             threading.Thread(target=_download_and_run_update,
                              args=(self._release, _cb), daemon=True).start()
 
@@ -3385,12 +3417,58 @@ class App(tk.Tk):
         inner.bind("<Configure>",
                    lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
 
-        lbl_status = tk.Label(win, text="Buscando versões...",
-                              font=("Helvetica", 8), fg=FG_DIM, bg=BG)
-        lbl_status.pack(pady=(0, 4))
+        lbl_fetch = tk.Label(win, text="Buscando versões...",
+                             font=("Helvetica", 8), fg=FG_DIM, bg=BG)
+        lbl_fetch.pack(pady=(0, 2))
+
+        # área de status/progresso do download (oculta inicialmente)
+        dl_frame = tk.Frame(win, bg=BG)
+        lbl_dl_status = tk.Label(dl_frame, text="", font=("Helvetica", 8), fg=FG_DIM, bg=BG)
+        lbl_dl_status.pack()
+        dl_pb_var = tk.IntVar(value=0)
+        dl_pb = ttk.Progressbar(dl_frame, variable=dl_pb_var, maximum=100, length=360, mode="determinate")
+        dl_pb.pack(pady=(2, 4), padx=20)
+
+        def _start_download(rel, btn):
+            btn.config(state="disabled", text="Baixando...")
+            dl_frame.pack(pady=(0, 4))
+            dl_pb_var.set(0)
+            lbl_dl_status.config(text="Conectando ao GitHub...", fg=FG_DIM)
+
+            def _cb(status):
+                if status.startswith("downloading:"):
+                    pct = int(status.split(":")[1])
+                    win.after(0, lambda p=pct: [
+                        dl_pb_var.set(p),
+                        lbl_dl_status.config(text=f"Baixando...  {p}%", fg=FG_DIM)
+                    ])
+                elif status.startswith("done:"):
+                    path = status[5:]
+                    win.after(0, lambda: [
+                        dl_pb_var.set(100),
+                        lbl_dl_status.config(text="Concluído! Iniciando instalador...", fg=ACCENT)
+                    ])
+                    def _launch():
+                        subprocess.Popen([path], shell=False)
+                        self.after(800, self.destroy)
+                    win.after(600, _launch)
+                elif status == "no_asset":
+                    win.after(0, lambda: [
+                        dl_frame.pack_forget(),
+                        webbrowser.open(rel.get("html_url", _GH_RELEASES_PAGE))
+                    ])
+                else:
+                    win.after(0, lambda: [
+                        dl_frame.pack_forget(),
+                        btn.config(state="normal", text="Baixar"),
+                        lbl_dl_status.config(text=f"Erro: {status[6:]}", fg=RED)
+                    ])
+
+            threading.Thread(target=_download_and_run_update,
+                             args=(rel, _cb), daemon=True).start()
 
         def _populate(releases):
-            lbl_status.config(text="")
+            lbl_fetch.config(text="")
             if not releases:
                 tk.Label(inner, text="Nenhuma versão encontrada ou sem conexão.",
                          font=("Helvetica", 9), fg=FG_DIM, bg=BG2).pack(pady=20)
@@ -3399,8 +3477,8 @@ class App(tk.Tk):
                 tag      = rel.get("tag_name", "?")
                 name     = rel.get("name", tag)
                 pub_date = rel.get("published_at", "")[:10]
-                url      = rel.get("html_url", _GH_RELEASES_PAGE)
                 is_cur   = (tag == self._ver)
+                has_exe  = any(a.get("name", "").endswith(".exe") for a in rel.get("assets", []))
 
                 row = tk.Frame(inner, bg=BG2, pady=4)
                 row.pack(fill="x", padx=4)
@@ -3417,11 +3495,17 @@ class App(tk.Tk):
                 if is_cur:
                     tk.Label(row, text="  ✔ instalada", font=("Helvetica", 8, "italic"),
                              fg=ACCENT, bg=BG2).pack(side="right", padx=8)
+                elif has_exe:
+                    btn_dl = tk.Button(row, text="Baixar", font=("Courier", 8, "bold"),
+                                       bg=ACCENT, fg=BG, relief="flat", padx=8, pady=2,
+                                       cursor="hand2")
+                    btn_dl.config(command=lambda r=rel, b=btn_dl: _start_download(r, b))
+                    btn_dl.pack(side="right", padx=8)
                 else:
-                    tk.Button(row, text="Baixar", font=("Courier", 8, "bold"),
-                              bg=ACCENT, fg=BG, relief="flat", padx=8, pady=2,
+                    tk.Button(row, text="Ver no GitHub", font=("Courier", 8),
+                              bg=BG2, fg="#44aaff", relief="flat", padx=8, pady=2,
                               cursor="hand2",
-                              command=lambda u=url: webbrowser.open(u)
+                              command=lambda r=rel: webbrowser.open(r.get("html_url", _GH_RELEASES_PAGE))
                               ).pack(side="right", padx=8)
 
         win.after(0, lambda: _fetch_all_releases(lambda r: win.after(0, lambda: _populate(r))))
